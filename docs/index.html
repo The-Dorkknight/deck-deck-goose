@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deck Deck Goose</title>
+<meta name="description" content="A normal-looking This PC folder (disks, Users, Documents) for Linux file managers, plus a Steam game manager. Source-available, non-commercial. Work in progress.">
+<link rel="icon" href="images/favicon-64.png"><link rel="apple-touch-icon" href="images/apple-touch-icon.png">
+<style>
+:root{--bg:#0a0d1f;--card:#141a38;--ink:#eaf2ff;--mute:#9aa8d0;--line:#27305e;--accent:#25c8ff;--accent2:#ff8a1f;--warn:#3a2a0a;--warnink:#ffcf66}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 system-ui,sans-serif}
+main{max-width:900px;margin:0 auto;padding:0 16px 40px}
+.wip{background:var(--warn);color:var(--warnink);text-align:center;padding:.6em 16px;font-weight:700}
+.hero{display:flex;gap:20px;align-items:center;flex-wrap:wrap;padding:28px 0}.hero img.icon{width:96px;height:96px;border-radius:20px}
+h1{margin:0;font-size:2rem}h2{margin:1.4em 0 .4em;color:var(--accent2)}body{background:radial-gradient(1000px 400px at 50% -100px,#1b2760,var(--bg) 70%) fixed}p.lead{color:var(--mute);margin:.3em 0}
+.shot{width:100%;height:auto;border:1px solid var(--line);border-radius:12px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px}.card h3{margin:.2em 0}
+a{color:var(--accent)}code,pre{font-family:ui-monospace,monospace;font-size:.9em}pre{background:var(--card);border:1px solid var(--line);padding:12px;border-radius:8px;overflow-x:auto}
+footer{color:var(--mute);font-size:.88rem;border-top:1px solid var(--line);margin-top:30px;padding-top:12px}
+.btn{display:inline-block;background:var(--accent);color:#04101f;padding:.55em 1.1em;border-radius:8px;text-decoration:none;font-weight:600;margin:.4em .4em .4em 0}
+</style></head><body>
+<div class="wip">WORK IN PROGRESS: MANY FEATURES MAY BE BROKEN (0.6.3-wip)</div>
+<main>
+<img class="shot" src="images/deck-deck-goose.webp" alt="Deck Deck Goose: a cyborg goose riding a flying Steam Deck over a neon city">
+<div class="hero"><img class="icon" src="images/icon-512.png" alt="Deck Deck Goose icon">
+<div><h1>Deck Deck Goose</h1><p class="lead">A normal-looking <b>This PC</b> folder for Linux file managers: your disks by name, Users, Documents, Downloads. Plus a Steam game manager: move games between drives, clear junk, compress. Made for Bazzite and Nobara, should work on Mint too. The Steam library manager also runs on Windows and macOS. Bundles Zombie-Deck, a wake-from-sleep fix for handhelds.</p>
+<a class="btn" id="repo" href="https://github.com/The-Dorkknight/deck-deck-goose">View on GitHub</a><a class="btn" href="DeckDeckGoose-manual.pdf">PDF manual</a><a class="btn" id="rel" href="https://github.com/The-Dorkknight/deck-deck-goose/releases">Releases</a></div></div>
+<img class="shot" src="images/gui-games.webp" alt="The Games tab showing Steam libraries, game covers with Move and Compress buttons, and the junk list">
+<h2>What you get</h2>
+<div class="cards">
+<div class="card"><h3>Plain paths</h3><p>Disks / Games, Users / you, Documents. No more digging through <code>/var/home</code> or <code>/run/media</code>.</p></div>
+<div class="card"><h3>Works with any file manager</h3><p>It is just a folder of shortcuts, so a split-pane manager like Dolphin (F3) or Double Commander can open it.</p></div>
+<div class="card"><h3>Flatpak access</h3><p>One tick lets a Flatpak file manager see your disks. Reversible.</p></div>
+<div class="card"><h3>Never touches the OS</h3><p>The read-only system part of the disk is hidden and untouched. No sudo.</p></div>
+<div class="card"><h3>Move Steam games</h3><p>Pick a drive: the game, its Proton saves and shader cache are copied, checked file by file, and Steam is told where it is.</p></div>
+<div class="card"><h3>Clear junk</h3><p>Shader caches of uninstalled games, download leftovers, Steam's caches. Anything that could hold saves is never ticked for you.</p></div>
+<div class="card"><h3>Game Mode tile</h3><p>One click adds <i>Deck Deck Goose</i> and <i>Airlock</i> to Steam, so the app opens full screen in Game Mode on a handheld.</p></div>
+<div class="card"><h3>Airlock</h3><p>Tap a tile in Game Mode and a KDE desktop opens in a window while your game keeps running. Close it and you are back. Never reboots. <b>Untested on real hardware.</b></p></div>
+<div class="card"><h3>Sound</h3><p>Fixes the quiet ROG Ally speakers on Bazzite in one press, boosts the volume to 150% and picks the output, in Desktop and Game Mode.</p></div>
+<div class="card"><h3>On-screen keyboard</h3><p>Installs if needed and turns on KDE's touch keyboard (Plasma Keyboard or Maliit) for Desktop Mode on Bazzite and Nobara KDE.</p></div>
+<div class="card"><h3>Estimate, then compress</h3><p>On btrfs drives, a quick read-only estimate shows what a game would save. Compress then packs only the files that actually shrink, skipping videos, audio and archives.</p></div>
+</div>
+<h2>In Game Mode</h2>
+<img class="shot" src="images/gui-game-mode.webp" alt="The Games tab in Game Mode with big buttons and Back to Steam">
+<h2>Airlock</h2>
+<img class="shot" src="images/gui-airlock.webp" alt="The Airlock tab">
+<h2>Install</h2>
+<ol><li>Download the zip from the Releases page and unzip it.</li><li>Double-click <code>DeckDeckGoose-Linux.sh</code> and choose Run.</li><li>Tick <i>I understand</i>, tick your Flatpak file managers, press <i>Install / update</i>, then <i>Check</i>.</li></ol>
+<h2>What does not exist yet</h2>
+<ul><li>Testing on a real Bazzite, Nobara or Mint machine, with a real Steam client and real btrfs compression (so far: simulated data, plus one real cross-drive move test).</li><li>Heroic, Lutris, GOG and Epic games.</li><li>Instant refresh when a disk is plugged in (up to 30 seconds).</li><li>Automatic setup of Double Commander or Krusader.</li><li>Drive letters, and unlocking encrypted disks.</li></ul>
+<footer>Copyright Matthew Armstrong. Source-available under the <a href="https://polyformproject.org/licenses/noncommercial/1.0.0">PolyForm Noncommercial License 1.0.0</a> (not open source; free for non-commercial use). Provided as is, no warranty, no liability. Not affiliated with Valve, Steam, Bazzite, KDE, Linux Mint or Flatpak. Screenshots show invented games. Artwork supplied by the project owner.</footer>
+</main>
+<script>
+(function(){try{var h=location.hostname,p=location.pathname.split('/').filter(Boolean),o='The-Dorkknight',r='deck-deck-goose';
+if(h.endsWith('.github.io')){o=h.split('.')[0];if(p[0])r=p[0];}
+var b='https://github.com/'+o+'/'+r;document.getElementById('repo').href=b;document.getElementById('rel').href=b+'/releases';}catch(e){}})();
+</script></body></html>

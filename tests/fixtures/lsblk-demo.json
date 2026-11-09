@@ -1,0 +1,13 @@
+{"blockdevices":[
+ {"name":"nvme0n1","path":"/dev/nvme0n1","label":null,"fstype":null,"size":512110190592,"rm":false,"hotplug":false,"type":"disk","mountpoints":[null],"children":[
+  {"name":"nvme0n1p1","path":"/dev/nvme0n1p1","label":null,"fstype":"vfat","size":629145600,"rm":false,"hotplug":false,"type":"part","mountpoints":["/boot/efi"]},
+  {"name":"nvme0n1p2","path":"/dev/nvme0n1p2","label":"bazzite","fstype":"btrfs","size":511000000000,"rm":false,"hotplug":false,"type":"part","mountpoints":["/var/home","/var","/sysroot/ostree/deploy/default/var","/sysroot","/"]}]},
+ {"name":"nvme1n1","path":"/dev/nvme1n1","label":null,"fstype":null,"size":1000204886016,"rm":false,"hotplug":false,"type":"disk","mountpoints":[null],"children":[
+  {"name":"nvme1n1p1","path":"/dev/nvme1n1p1","label":"Games","fstype":"ext4","size":1000203091968,"rm":false,"hotplug":false,"type":"part","mountpoints":["/var/mnt/games"]}]},
+ {"name":"sda","path":"/dev/sda","label":null,"fstype":null,"size":2000398934016,"rm":false,"hotplug":false,"type":"disk","mountpoints":[null],"children":[
+  {"name":"sda1","path":"/dev/sda1","label":"Backup","fstype":"exfat","size":2000397795328,"rm":false,"hotplug":false,"type":"part","mountpoints":["/run/media/matthew/Backup"]}]},
+ {"name":"sdb","path":"/dev/sdb","label":null,"fstype":null,"size":1000204886016,"rm":false,"hotplug":false,"type":"disk","mountpoints":[null],"children":[
+  {"name":"sdb1","path":"/dev/sdb1","label":null,"fstype":"ntfs","size":1000203091968,"rm":false,"hotplug":false,"type":"part","mountpoints":[null]}]},
+ {"name":"sdc","path":"/dev/sdc","label":"USBSTICK","fstype":"vfat","size":32010928128,"rm":true,"hotplug":true,"type":"disk","mountpoints":["/run/media/matthew/USBSTICK"]},
+ {"name":"loop0","path":"/dev/loop0","label":null,"fstype":"squashfs","size":67108864,"rm":false,"hotplug":false,"type":"loop","mountpoints":["/var/lib/snapd/snap/core/1"]}
+]}

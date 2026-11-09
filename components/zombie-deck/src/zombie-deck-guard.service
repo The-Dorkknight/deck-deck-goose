@@ -1,0 +1,23 @@
+# Zombie-Deck crash guard  -  /etc/systemd/system/zombie-deck-guard.service
+#
+# At boot: counts unclean shutdowns that followed a Zombie-Deck revive; after
+# two in a row asks the user (20 s, default: disable). On a clean shutdown the
+# ExecStop clears the marker and the counter.
+#
+# Boot safety: Type=simple, nothing depends on it, it is not part of any
+# target's Requires=, and a failure of the guard never fails the boot
+# ("-" prefix). Even if the script hung, boot would proceed normally.
+[Unit]
+Description=Zombie-Deck crash guard
+After=multi-user.target
+
+[Service]
+Type=simple
+RemainAfterExit=yes
+ExecStart=-/usr/local/bin/zombie-deck guard
+ExecStop=-/usr/local/bin/zombie-deck shutdown
+TimeoutStartSec=300
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

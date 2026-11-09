@@ -1,0 +1,28 @@
+name: Release
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Work out the tag from the version file
+        id: v
+        run: |
+          VER=$(python3 -c "import re;print(re.search(r'__version__ = \"(.+?)\"', open('src/ddg/__init__.py').read()).group(1))")
+          echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+      - name: Zip the source
+        run: git archive --format=zip --prefix=deck-deck-goose/ -o "deck-deck-goose-${{ steps.v.outputs.tag }}.zip" HEAD
+      - name: Create the pre-release (skipped if it already exists)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.v.outputs.tag }}"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" "deck-deck-goose-$TAG.zip" docs/DeckDeckGoose-manual.pdf \
+            --target "$GITHUB_SHA" --prerelease --title "Deck Deck Goose $TAG" \
+            --notes "Work in progress: Deck Deck Goose - a This PC folder for Linux file managers, a Steam game manager, Game Mode tiles, sound fix, on-screen keyboard and Airlock (a desktop inside Game Mode, untested on real hardware). The PDF manual is attached. Unzip, then double-click DeckDeckGoose-Linux.sh. Back up saves you cannot lose. See the README and CHANGELOG. Source-available, non-commercial licence."

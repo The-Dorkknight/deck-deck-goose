@@ -1,0 +1,29 @@
+name: Bug report
+description: Something did not work
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown in the window footer, or run `python3 -m ddg --version`
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Linux distribution and file manager
+      placeholder: e.g. Bazzite KDE + Dolphin, Linux Mint + Nemo
+    validations:
+      required: true
+  - type: textarea
+    id: check
+    attributes:
+      label: Output of the Check button (or `python3 -m ddg check`) and `python3 -m ddg disks`
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true

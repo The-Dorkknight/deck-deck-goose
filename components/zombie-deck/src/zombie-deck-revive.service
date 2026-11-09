@@ -1,0 +1,11 @@
+# Zombie-Deck revive  -  /etc/systemd/system/zombie-deck-revive.service
+# Started by zombie-deck-sleep.service each time the device wakes. "restart"
+# is used, so a quick second sleep replaces a revive that is still running.
+# No [Install] section: it is never started at boot.
+[Unit]
+Description=Zombie-Deck revive after wake
+
+[Service]
+Type=exec
+ExecStart=-/usr/local/bin/zombie-deck revive
+TimeoutStopSec=5

@@ -1,0 +1,27 @@
+# Zombie-Deck sleep hook  -  /etc/systemd/system/zombie-deck-sleep.service
+#
+# Why a unit and not a script in a system-sleep folder: systemd-sleep only
+# runs hook scripts from its compiled-in folder /usr/lib/systemd/system-sleep,
+# which is read-only on Bazzite and other image-based systems.
+# (/etc/systemd/system-sleep is never looked at.) This unit hooks into
+# sleep.target instead, which every suspend, hibernate, hybrid-sleep and
+# suspend-then-hibernate pulls in, on every systemd distro:
+#   going to sleep: sleep.target starts -> ExecStart  = snapshot
+#   waking up:      sleep.target stops  -> ExecStop   = start the revive
+# The revive runs in its own unit so this one stops at once and never holds
+# up the wake. Nothing here runs at boot.
+[Unit]
+Description=Zombie-Deck: snapshot before sleep, revive after wake
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=-/usr/local/bin/zombie-deck snapshot
+ExecStop=-/usr/bin/systemctl --no-block restart zombie-deck-revive.service
+TimeoutStartSec=15
+TimeoutStopSec=10
+
+[Install]
+WantedBy=sleep.target

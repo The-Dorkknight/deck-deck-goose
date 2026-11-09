@@ -1,0 +1,463 @@
+#!/usr/bin/env python3
+"""Zombie-Deck on-screen overlay and crash-guard prompt.
+
+    zombie-deck-overlay show                 brain overlay driven by $ZD_STATE_DIR/overlay
+    zombie-deck-overlay prompt SECONDS N     "keep Zombie-Deck?" dialog, exit 0 keep / 1 disable
+
+Overlay states (file contents): init = green brain pulsing slowly while the
+revive runs; ok = green brain flashing for 3 s then gone; fail = red brain
+for 5 s then gone. Nothing else, no text, so it never gets in the way.
+
+Icons: icons/zombie-brain-{green,red}-{128,256}.png (artwork supplied by
+Matthew). If they are missing, a simple brain is drawn with cairo instead.
+
+Backends, tried in order:
+  1. X11 via ctypes + libX11 (no Python packages needed). Sets the
+     GAMESCOPE_EXTERNAL_OVERLAY property before the window is mapped, which is
+     what makes gamescope (Steam game mode) composite it over the game - the
+     same mechanism MangoHud's mangoapp uses. In desktop mode (KDE/GNOME,
+     X11 or Xwayland) it is an override-redirect, click-through window.
+  2. GTK (PyGObject + cairo, works on
+KDE/GNOME desktop mode and under gamescope via GAMESCOPE_EXTERNAL_OVERLAY),
+then notify-send / zenity / kdialog with the bundled SVG icons, then stderr.
+Run as the logged-in user with their DISPLAY/WAYLAND_DISPLAY (zombie-deck does
+that); it is harmless to run by hand for a preview:  ZD_PREVIEW=ok python3 zombie-deck-overlay show
+"""
+import math
+import os
+import subprocess
+import sys
+import time
+
+STATE_DIR = os.environ.get("ZD_STATE_DIR", "/run/zombie-deck")
+STATE_FILE = os.path.join(STATE_DIR, "overlay")
+HERE = os.path.dirname(os.path.abspath(__file__))
+ICONS = os.path.join(HERE, "icons")
+GREEN = (0.20, 0.90, 0.35)
+RED = (0.95, 0.25, 0.20)
+OK_SECONDS, FAIL_SECONDS, INIT_MAX_SECONDS = 3.0, 5.0, 120.0
+
+
+def read_state():
+    pv = os.environ.get("ZD_PREVIEW")
+    if pv:
+        return pv
+    try:
+        with open(STATE_FILE) as f:
+            return f.read().strip() or "init"
+    except OSError:
+        return "init"
+
+
+# ---------------------------------------------------------------- brain shape
+def draw_brain(cr, size, colour, alpha):
+    """Original cartoon brain: two lobes, a few gyri, drawn with cairo."""
+    s = size / 100.0
+    cr.save()
+    cr.scale(s, s)
+    r, g, b = colour
+    # glow
+    cr.set_source_rgba(r, g, b, 0.25 * alpha)
+    cr.arc(50, 52, 46, 0, 2 * math.pi)
+    cr.fill()
+    # lobes
+    def lobe(cx):
+        cr.save()
+        cr.translate(cx, 50)
+        cr.scale(1.0, 1.25)
+        cr.arc(0, 0, 24, 0, 2 * math.pi)
+        cr.restore()
+        cr.set_source_rgba(r, g, b, alpha)
+        cr.fill_preserve()
+        cr.set_source_rgba(r * 0.5, g * 0.5, b * 0.5, alpha)
+        cr.set_line_width(2.5)
+        cr.stroke()
+    lobe(34)
+    lobe(66)
+    # stem
+    cr.set_source_rgba(r, g, b, alpha)
+    cr.rectangle(44, 74, 12, 14)
+    cr.fill()
+    # gyri (wiggly lines)
+    cr.set_source_rgba(r * 0.45, g * 0.45, b * 0.45, alpha)
+    cr.set_line_width(2.2)
+    for cx, sgn in ((34, -1), (66, 1)):
+        for y, w in ((32, 12), (46, 16), (60, 13)):
+            cr.move_to(cx - w, y)
+            cr.curve_to(cx - w / 2, y - 6 * sgn, cx + w / 2, y + 6 * sgn, cx + w, y)
+            cr.stroke()
+    # fissure
+    cr.set_line_width(3)
+    cr.move_to(50, 22)
+    cr.curve_to(47, 40, 53, 58, 50, 78)
+    cr.stroke()
+    cr.restore()
+
+
+_ICON_CACHE = {}
+
+
+def icon_path(colour, size=256):
+    return os.path.join(ICONS, f"zombie-brain-{colour}-{size}.png")
+
+
+def draw_icon(cr, size, colour_name, alpha):
+    """Paint the supplied PNG at SIZE px with ALPHA; fall back to the drawn brain."""
+    import cairo
+    if colour_name not in _ICON_CACHE:
+        try:
+            _ICON_CACHE[colour_name] = cairo.ImageSurface.create_from_png(icon_path(colour_name))
+        except Exception:
+            _ICON_CACHE[colour_name] = None
+    img = _ICON_CACHE[colour_name]
+    if img is None:
+        draw_brain(cr, size, RED if colour_name == "red" else GREEN, alpha)
+        return
+    sc = size / img.get_width()
+    cr.save()
+    cr.scale(sc, sc)
+    cr.set_source_surface(img, 0, 0)
+    cr.paint_with_alpha(alpha)
+    cr.restore()
+
+
+def alpha_for(state, t0, t):
+    """Opacity for the current state; None means we're done."""
+    el = t - t0
+    if state == "init":
+        return 0.45 + 0.35 * math.sin(el * 2.2) if el < INIT_MAX_SECONDS else None
+    if state == "ok":
+        return (1.0 if int(el * 4) % 2 == 0 else 0.15) if el < OK_SECONDS else None
+    if state == "fail":
+        return 1.0 if el < FAIL_SECONDS else None
+    return None
+
+
+# ---------------------------------------------------------------- X11 backend
+def x11_overlay(size=128, margin=24):
+    """Draw the brain with plain Xlib. Returns False if X11 isn't usable."""
+    import ctypes
+    import ctypes.util
+
+    if not os.environ.get("DISPLAY"):
+        return False
+    libname = ctypes.util.find_library("X11") or "libX11.so.6"
+    try:
+        x = ctypes.CDLL(libname)
+    except OSError:
+        return False
+    try:
+        icons = {c: open(os.path.join(ICONS, f"zombie-brain-{c}-{size}.bgra"), "rb").read()
+                 for c in ("green", "red")}
+    except OSError:
+        return False
+    if any(len(v) != size * size * 4 for v in icons.values()):
+        return False
+
+    c_ulong, c_long, c_int, c_uint, c_void_p = (ctypes.c_ulong, ctypes.c_long, ctypes.c_int,
+                                               ctypes.c_uint, ctypes.c_void_p)
+
+    class XVisualInfo(ctypes.Structure):
+        _fields_ = [("visual", c_void_p), ("visualid", c_ulong), ("screen", c_int), ("depth", c_int),
+                    ("c_class", c_int), ("red_mask", c_ulong), ("green_mask", c_ulong),
+                    ("blue_mask", c_ulong), ("colormap_size", c_int), ("bits_per_rgb", c_int)]
+
+    class XSetWindowAttributes(ctypes.Structure):
+        _fields_ = [("background_pixmap", c_ulong), ("background_pixel", c_ulong),
+                    ("border_pixmap", c_ulong), ("border_pixel", c_ulong),
+                    ("bit_gravity", c_int), ("win_gravity", c_int), ("backing_store", c_int),
+                    ("backing_planes", c_ulong), ("backing_pixel", c_ulong), ("save_under", c_int),
+                    ("event_mask", c_long), ("do_not_propagate_mask", c_long),
+                    ("override_redirect", c_int), ("colormap", c_ulong), ("cursor", c_ulong)]
+
+    x.XOpenDisplay.restype = c_void_p
+    x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x.XDefaultScreen.argtypes = [c_void_p]
+    x.XRootWindow.restype = c_ulong
+    x.XRootWindow.argtypes = [c_void_p, c_int]
+    x.XDisplayWidth.argtypes = [c_void_p, c_int]
+    x.XDefaultVisual.restype = c_void_p
+    x.XDefaultVisual.argtypes = [c_void_p, c_int]
+    x.XDefaultDepth.argtypes = [c_void_p, c_int]
+    x.XMatchVisualInfo.argtypes = [c_void_p, c_int, c_int, c_int, ctypes.POINTER(XVisualInfo)]
+    x.XCreateColormap.restype = c_ulong
+    x.XCreateColormap.argtypes = [c_void_p, c_ulong, c_void_p, c_int]
+    x.XCreateWindow.restype = c_ulong
+    x.XCreateWindow.argtypes = [c_void_p, c_ulong, c_int, c_int, c_uint, c_uint, c_uint, c_int, c_uint,
+                                c_void_p, c_ulong, ctypes.POINTER(XSetWindowAttributes)]
+    x.XInternAtom.restype = c_ulong
+    x.XInternAtom.argtypes = [c_void_p, ctypes.c_char_p, c_int]
+    x.XChangeProperty.argtypes = [c_void_p, c_ulong, c_ulong, c_ulong, c_int, c_int, c_void_p, c_int]
+    x.XStoreName.argtypes = [c_void_p, c_ulong, ctypes.c_char_p]
+    x.XMapRaised.argtypes = [c_void_p, c_ulong]
+    x.XRaiseWindow.argtypes = [c_void_p, c_ulong]
+    x.XCreateGC.restype = c_void_p
+    x.XCreateGC.argtypes = [c_void_p, c_ulong, c_ulong, c_void_p]
+    x.XCreateImage.restype = c_void_p
+    x.XCreateImage.argtypes = [c_void_p, c_void_p, c_uint, c_int, c_int, c_void_p, c_uint, c_uint, c_int, c_int]
+    x.XPutImage.argtypes = [c_void_p, c_ulong, c_void_p, c_void_p, c_int, c_int, c_int, c_int, c_uint, c_uint]
+    x.XFlush.argtypes = [c_void_p]
+    x.XSync.argtypes = [c_void_p, c_int]
+    x.XDestroyWindow.argtypes = [c_void_p, c_ulong]
+    x.XCloseDisplay.argtypes = [c_void_p]
+
+    dpy = x.XOpenDisplay(None)
+    if not dpy:
+        return False
+    scr = x.XDefaultScreen(dpy)
+    root = x.XRootWindow(dpy, scr)
+    vinfo = XVisualInfo()
+    attrs = XSetWindowAttributes()
+    mask = (1 << 1) | (1 << 3)                       # CWBackPixel | CWBorderPixel
+    if x.XMatchVisualInfo(dpy, scr, 32, 4, ctypes.byref(vinfo)):   # 32-bit TrueColor = real transparency
+        visual, depth = vinfo.visual, 32
+        attrs.colormap = x.XCreateColormap(dpy, root, visual, 0)
+        mask |= 1 << 13                              # CWColormap
+    else:                                            # no ARGB visual: icon on black
+        visual, depth = x.XDefaultVisual(dpy, scr), x.XDefaultDepth(dpy, scr)
+    in_gamescope = bool(os.environ.get("GAMESCOPE_WAYLAND_DISPLAY"))
+    if not in_gamescope:
+        attrs.override_redirect = 1                  # desktop: no decorations, no focus, always on top
+        mask |= 1 << 9                               # CWOverrideRedirect
+    sw = x.XDisplayWidth(dpy, scr)
+    win = x.XCreateWindow(dpy, root, max(0, sw - size - margin), margin, size, size, 0, depth, 1,
+                          visual, mask, ctypes.byref(attrs))
+    x.XStoreName(dpy, win, b"Zombie-Deck")
+    one = (c_long * 1)(1)
+    cardinal = 6                                     # XA_CARDINAL
+    # gamescope: draw this window on top of the game (must be set before mapping)
+    x.XChangeProperty(dpy, win, x.XInternAtom(dpy, b"GAMESCOPE_EXTERNAL_OVERLAY", 0), cardinal, 32, 0,
+                      one, 1)
+    # click-through: empty input shape (needs libXext; skip quietly without it)
+    try:
+        xext = ctypes.CDLL(ctypes.util.find_library("Xext") or "libXext.so.6")
+        xext.XShapeCombineRectangles.argtypes = [c_void_p, c_ulong, c_int, c_int, c_int, c_void_p, c_int,
+                                                 c_int, c_int]
+        xext.XShapeCombineRectangles(dpy, win, 2, 0, 0, None, 0, 0, 0)   # ShapeInput, ShapeSet, no rects
+    except (OSError, AttributeError):
+        pass
+    x.XMapRaised(dpy, win)
+    gc = x.XCreateGC(dpy, win, 0, None)
+
+    tables = {}
+
+    def frame(colour, alpha):
+        key = (colour, round(alpha * 20))
+        if key not in tables:
+            a = key[1] / 20.0
+            tables[key] = icons[colour].translate(bytes(min(255, int(i * a + 0.5)) for i in range(256)))
+        buf = ctypes.create_string_buffer(tables[key], len(tables[key]))
+        img = x.XCreateImage(dpy, visual, depth, 2, 0, buf, size, size, 32, 0)   # ZPixmap
+        x.XPutImage(dpy, win, gc, img, 0, 0, 0, 0, size, size)
+        x.XRaiseWindow(dpy, win)
+        x.XFlush(dpy)
+        # the XImage struct leaks a few bytes per frame; the buffer is ours (not freed by Xlib)
+
+    state, t0 = read_state(), time.monotonic()
+    try:
+        while True:
+            st = read_state()
+            if st != state:
+                state, t0 = st, time.monotonic()
+            a = alpha_for(state, t0, time.monotonic())
+            if a is None:
+                break
+            frame("red" if state == "fail" else "green", a)
+            time.sleep(0.08)
+    finally:
+        x.XDestroyWindow(dpy, win)
+        x.XSync(dpy, 0)
+        x.XCloseDisplay(dpy)
+    return True
+
+
+# ---------------------------------------------------------------- GTK backend
+def gtk_overlay():
+    import gi
+    try:
+        gi.require_version("Gtk", "3.0")
+    except ValueError:
+        return False
+    from gi.repository import Gtk, Gdk, GLib
+
+    size = 128
+    win = Gtk.Window(type=Gtk.WindowType.POPUP)
+    win.set_title("Zombie-Deck")
+    win.set_decorated(False)
+    win.set_keep_above(True)
+    win.set_accept_focus(False)
+    win.set_skip_taskbar_hint(True)
+    win.set_default_size(size, size)
+    screen = win.get_screen()
+    visual = screen.get_rgba_visual()
+    if visual and screen.is_composited():
+        win.set_visual(visual)
+    win.set_app_paintable(True)
+    # top-right corner, a little in
+    win.move(max(0, screen.get_width() - size - 24), 24)
+
+    area = Gtk.DrawingArea()
+    win.add(area)
+    ctx = {"state": read_state(), "t0": time.monotonic(), "alpha": 0.6}
+
+    def on_draw(_w, cr):
+        cr.set_operator(1)  # OVER after clearing
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.set_operator(0)  # CLEAR
+        cr.paint()
+        cr.set_operator(2)  # OVER
+        draw_icon(cr, size, "red" if ctx["state"] == "fail" else "green", ctx["alpha"])
+        return True
+
+    area.connect("draw", on_draw)
+
+    def tick():
+        st = read_state()
+        if st != ctx["state"]:
+            ctx["state"], ctx["t0"] = st, time.monotonic()
+        a = alpha_for(ctx["state"], ctx["t0"], time.monotonic())
+        if a is None:
+            Gtk.main_quit()
+            return False
+        ctx["alpha"] = a
+        area.queue_draw()
+        return True
+
+    GLib.timeout_add(80, tick)
+    win.show_all()
+    # gamescope only composites windows it is told are overlays
+    try:
+        gdkwin = win.get_window()
+        if gdkwin is not None and hasattr(gdkwin, "get_xid"):
+            xid = gdkwin.get_xid()
+            subprocess.run(["xprop", "-id", str(xid), "-f", "GAMESCOPE_EXTERNAL_OVERLAY", "32c",
+                            "-set", "GAMESCOPE_EXTERNAL_OVERLAY", "1"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+    except Exception:
+        pass
+    Gtk.main()
+    return True
+
+
+def gtk_prompt(seconds, count):
+    import gi
+    try:
+        gi.require_version("Gtk", "3.0")
+    except ValueError:
+        return None
+    from gi.repository import Gtk, GLib
+
+    dlg = Gtk.MessageDialog(message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.NONE,
+                            text="Zombie-Deck: keep it active?")
+    dlg.set_title("Zombie-Deck")
+    dlg.set_keep_above(True)
+    dlg.add_button("Disable (back to stock)", 1)
+    dlg.add_button("Keep Zombie-Deck", 0)
+    dlg.set_default_response(1)
+    left = {"n": int(seconds)}
+
+    def text():
+        return (f"The device shut down uncleanly {count} times in a row after a Zombie-Deck revive.\n"
+                f"If you don't choose, Zombie-Deck will be disabled in {left['n']} s and the system\n"
+                f"goes back to stock sleep behaviour. Re-enable later with:  sudo zombie-deck enable")
+
+    dlg.format_secondary_text(text())
+
+    def tick():
+        left["n"] -= 1
+        if left["n"] <= 0:
+            dlg.response(1)
+            return False
+        dlg.format_secondary_text(text())
+        return True
+
+    GLib.timeout_add(1000, tick)
+    r = dlg.run()
+    dlg.destroy()
+    return 0 if r == 0 else 1
+
+
+# ------------------------------------------------------- notification backends
+def have(cmd):
+    from shutil import which
+    return which(cmd) is not None
+
+
+def notify(colour, seconds, body):
+    icon = icon_path(colour, 128)
+    if have("notify-send"):
+        subprocess.run(["notify-send", "-a", "Zombie-Deck", "-t", str(int(seconds * 1000)), "-i", icon,
+                        "Zombie-Deck", body], check=False)
+        return True
+    if have("kdialog"):
+        subprocess.run(["kdialog", "--title", "Zombie-Deck", "--icon", icon, "--passivepopup", body,
+                        str(int(seconds))], check=False)
+        return True
+    return False
+
+
+def notify_overlay():
+    """No GTK: one notification per state change instead of an animated brain."""
+    t0 = time.monotonic()
+    last = None
+    while time.monotonic() - t0 < INIT_MAX_SECONDS:
+        st = read_state()
+        if st != last:
+            last = st
+            if st == "ok":
+                return notify("green", OK_SECONDS, "Woke up properly.")
+            if st == "fail":
+                return notify("red", FAIL_SECONDS, "Wake-up fix failed - run: zombie-deck status")
+            if st == "init":
+                notify("green", 2, "Reviving after sleep...")
+        time.sleep(0.5)
+    return True
+
+
+def cli_prompt(seconds, count):
+    body = (f"The device shut down uncleanly {count} times in a row after a Zombie-Deck revive. "
+            f"Keep Zombie-Deck active? (disables in {seconds}s if you don't answer)")
+    if have("zenity"):
+        r = subprocess.run(["zenity", "--question", "--title=Zombie-Deck", "--timeout", str(seconds),
+                            "--text", body, "--ok-label=Keep Zombie-Deck", "--cancel-label=Disable"], check=False)
+        return 0 if r.returncode == 0 else 1
+    if have("kdialog"):
+        try:
+            r = subprocess.run(["kdialog", "--title", "Zombie-Deck", "--yesno", body,
+                                "--yes-label", "Keep Zombie-Deck", "--no-label", "Disable"],
+                               timeout=seconds, check=False)
+            return 0 if r.returncode == 0 else 1
+        except subprocess.TimeoutExpired:
+            return 1
+    print(body, file=sys.stderr)
+    return 1
+
+
+# ------------------------------------------------------------------------ main
+def main(argv):
+    mode = argv[1] if len(argv) > 1 else "show"
+    if mode == "show":
+        for backend in (x11_overlay, gtk_overlay):
+            try:
+                if backend():
+                    return 0
+            except Exception as e:  # no X11 / no gi / no display: fall through
+                print(f"zombie-deck-overlay: {backend.__name__} unavailable ({e})", file=sys.stderr)
+        notify_overlay()
+        return 0
+    if mode == "prompt":
+        seconds = int(argv[2]) if len(argv) > 2 else 20
+        count = argv[3] if len(argv) > 3 else "2"
+        try:
+            r = gtk_prompt(seconds, count)
+            if r is not None:
+                return r
+        except Exception as e:
+            print(f"zombie-deck-overlay: GTK backend unavailable ({e})", file=sys.stderr)
+        return cli_prompt(seconds, count)
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

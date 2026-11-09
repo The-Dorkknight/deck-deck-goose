@@ -1,0 +1,6 @@
+* text=auto
+*.sh text eol=lf
+*.command text eol=lf
+*.bat text eol=crlf
+src/zombie-deck text eol=lf
+src/zombie-deck-sleep-hook text eol=lf

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Example indicator hook. Rename to remove ".example" and chmod +x to enable.
+# Called with the new mode as $1: portal | desktop | game
+# Idea: change the ROG Ally stick lights per mode using Crateless.
+# The crateless command line below is a PLACEHOLDER – swap in Crateless's real RGB command.
+mode="$1"
+case "$mode" in
+  portal)  colour="f5a623" ;;   # amber  = Airlock open, game still running
+  desktop) colour="3b82f6" ;;   # blue   = real Desktop Mode
+  game)    colour="22c55e" ;;   # green  = Game Mode
+  *) exit 0 ;;
+esac
+command -v crateless >/dev/null && crateless rgb --colour "$colour"
+exit 0

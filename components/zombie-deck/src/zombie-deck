@@ -1,0 +1,818 @@
+#!/bin/sh
+# Zombie-Deck - brings a Bazzite / Nobara handheld (ROG Ally, Steam Deck and
+# friends) properly back to life after sleep or hibernation.
+#
+# Project started 2026-11-04 18:10. Author: Matthew Armstrong (The-Dorkknight).
+# Licence: PolyForm Noncommercial 1.0.0 - see LICENSE.md.
+#
+# One POSIX sh file, no dependencies beyond coreutils. Optional helpers are used
+# when present: ryzenadj, nmcli, systemd-run, logger.
+#
+# Modes:
+#   snapshot   save the current power state (run before sleep by the hook)
+#   revive     restore the saved state and sanity-check the hardware (after wake)
+#   status     show the current state and whether the machine looks "zombie"
+#   test       dry-run revive: print every change it would make, change nothing
+#   log        show the last 60 lines of the Zombie-Deck log
+#   guard      boot-time crash counter (run by zombie-deck-guard.service)
+#   enable / disable   switch the sleep hook on or off ("disable" = stock)
+#   json       machine-readable status for other apps (Deck Deck Goose); no root needed
+#
+# Everything under /sys, /run and /dev is reached through $ZD_ROOT so the whole
+# script can be tested against a fake tree (tests/fake_sysfs.py builds one).
+
+# shellcheck disable=SC2015  # ok/bad/say always succeed, so A && B || C is safe here
+ZD_VERSION="0.3.1"
+ZD_BUILD_DATE="2026-11-07 20:45"
+
+ZD_ROOT="${ZD_ROOT:-}"
+ZD_CONF="${ZD_CONF:-${ZD_ROOT}/etc/zombie-deck/zombie-deck.conf}"
+ZD_STATE_DIR="${ZD_STATE_DIR:-${ZD_ROOT}/run/zombie-deck}"
+ZD_LIB="${ZD_LIB:-${ZD_ROOT}/var/lib/zombie-deck}"
+ZD_HOOKS_DIR="${ZD_HOOKS_DIR:-${ZD_ROOT}/etc/zombie-deck/sleep.d}"
+ZD_LIBEXEC="${ZD_LIBEXEC:-/usr/local/libexec/zombie-deck}"
+ZD_SLEEP_UNIT="zombie-deck-sleep.service"
+ZD_DRY_RUN="${ZD_DRY_RUN:-0}"
+ZD_QUIET=0; ZD_CHANGED=0; ZD_LAST=""
+
+# ---- settings: environment > conf file > built-in default --------------------
+ZD_KEYS="ZD_PROFILE ZD_TDP ZD_GPU_DPM ZD_CPU ZD_CONTROLLER ZD_WIFI ZD_SETTLE_SECONDS ZD_DOUBLE_TAP_SECONDS ZD_WIFI_WAIT_SECONDS ZD_LOG ZD_OVERLAY ZD_GUARD ZD_GUARD_PROMPT_SECONDS ZD_GUARD_SESSION_WAIT"
+for _k in $ZD_KEYS; do eval "_env_$_k=\${$_k:-}"; done      # remember the environment
+# shellcheck disable=SC1090
+[ -r "$ZD_CONF" ] && . "$ZD_CONF"                              # conf file (see src/zombie-deck.conf)
+for _k in $ZD_KEYS; do eval "_e=\$_env_$_k"; [ -n "$_e" ] && eval "$_k=\$_e"; done
+ZD_PROFILE="${ZD_PROFILE:-restore}"            # restore | performance | balanced | quiet | off
+ZD_TDP="${ZD_TDP:-restore}"                    # restore | off | <watts>
+ZD_GPU_DPM="${ZD_GPU_DPM:-restore}"            # restore | auto | off
+ZD_CPU="${ZD_CPU:-restore}"                    # restore | balance_performance | performance | off
+ZD_CONTROLLER="${ZD_CONTROLLER:-auto}"         # auto | off
+ZD_WIFI="${ZD_WIFI:-auto}"                     # auto | reload | off
+ZD_SETTLE_SECONDS="${ZD_SETTLE_SECONDS:-3}"    # wait for asusd / the EC to stop fiddling
+ZD_DOUBLE_TAP_SECONDS="${ZD_DOUBLE_TAP_SECONDS:-8 20}"   # extra passes, seconds after wake
+ZD_WIFI_WAIT_SECONDS="${ZD_WIFI_WAIT_SECONDS:-15}"       # NetworkManager's head start
+ZD_LOG="${ZD_LOG:-${ZD_ROOT}/var/log/zombie-deck.log}"
+ZD_OVERLAY="${ZD_OVERLAY:-on}"                 # on | off   green/red brain on screen
+ZD_GUARD="${ZD_GUARD:-on}"                     # on | off   crash counter at boot
+ZD_GUARD_PROMPT_SECONDS="${ZD_GUARD_PROMPT_SECONDS:-20}"   # no answer -> disable
+ZD_GUARD_SESSION_WAIT="${ZD_GUARD_SESSION_WAIT:-180}"      # seconds to wait for a desktop/game session to ask in
+# numbers only, or the built-in default
+num_or() { case "$1" in ''|*[!0-9\ ]*) echo "$2" ;; *) echo "$1" ;; esac; }
+ZD_SETTLE_SECONDS="$(num_or "$ZD_SETTLE_SECONDS" 3)"
+ZD_DOUBLE_TAP_SECONDS="$(num_or "$ZD_DOUBLE_TAP_SECONDS" "8 20")"
+ZD_WIFI_WAIT_SECONDS="$(num_or "$ZD_WIFI_WAIT_SECONDS" 15)"
+ZD_GUARD_PROMPT_SECONDS="$(num_or "$ZD_GUARD_PROMPT_SECONDS" 20)"
+ZD_GUARD_SESSION_WAIT="$(num_or "$ZD_GUARD_SESSION_WAIT" 180)"
+case "$ZD_TDP" in restore|off) ;; *) ZD_TDP="$(num_or "$ZD_TDP" restore)" ;; esac
+
+SYS="${ZD_ROOT}/sys"
+ARMOURY="$SYS/class/firmware-attributes/asus-armoury/attributes"
+PROFILE_FILE="$SYS/firmware/acpi/platform_profile"
+CPU_DIR="$SYS/devices/system/cpu"
+STATE="$ZD_STATE_DIR/state"
+STATE_PREV="$ZD_STATE_DIR/state.prev"
+# asus-armoury knob names; ppt_fppt is the pre-mainline name some patched kernels used
+TDP_ATTRS="ppt_pl1_spl ppt_pl2_sppt ppt_pl3_fppt ppt_fppt ppt_apu_sppt ppt_platform_sppt"
+ZD_FAILS=0
+
+# ---- helpers --------------------------------------------------------------
+zd_log() {
+    _msg="$(date '+%Y-%m-%d %H:%M:%S') [$ZD_MODE] $*"
+    echo "$_msg" >&2
+    { [ -n "$ZD_LOG" ] && mkdir -p "$(dirname "$ZD_LOG")" 2>/dev/null && echo "$_msg" >> "$ZD_LOG"; } 2>/dev/null
+    command -v logger >/dev/null 2>&1 && [ -z "$ZD_ROOT" ] && logger -t zombie-deck -- "$*" 2>/dev/null
+    return 0
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+rd() { [ -r "$1" ] && cat "$1" 2>/dev/null | head -n 1 | tr -d '\n'; }
+
+# wr FILE VALUE WHAT - write a sysfs value (or just report it in dry-run / test)
+wr() {
+    [ -z "$2" ] && return 0
+    _now="$(rd "$1")"
+    if [ "$_now" = "$2" ]; then
+        return 0
+    fi
+    if [ "$ZD_DRY_RUN" = "1" ]; then
+        [ "$ZD_QUIET" = "1" ] && { ZD_CHANGED=$((ZD_CHANGED + 1)); ZD_LAST="'$_now' -> '$2'"; return 0; }
+        zd_log "would set $3: '$_now' -> '$2'  ($1)"
+        return 0
+    fi
+    if printf '%s' "$2" > "$1" 2>/dev/null; then
+        [ "$ZD_QUIET" = "1" ] && { ZD_CHANGED=$((ZD_CHANGED + 1)); ZD_LAST="'$_now' -> '$2'"; return 0; }
+        zd_log "set $3: '$_now' -> '$2'"
+    else
+        zd_log "FAILED to set $3 ($1)"
+        ZD_FAILS=$((ZD_FAILS + 1))
+        return 1
+    fi
+}
+
+# quiet_begin / quiet_end WHAT - collapse many per-CPU writes into one log line
+quiet_begin() { ZD_QUIET=1; ZD_CHANGED=0; ZD_LAST=""; }
+quiet_end() {
+    ZD_QUIET=0
+    [ "$ZD_CHANGED" -gt 0 ] || return 0
+    [ "$ZD_DRY_RUN" = "1" ] && zd_log "would set $1: $ZD_CHANGED values across the CPUs, e.g. $ZD_LAST" || zd_log "set $1: $ZD_CHANGED values across the CPUs, e.g. $ZD_LAST"
+}
+
+# run CMD... - run a command, or report it in dry-run
+run() {
+    if [ "$ZD_DRY_RUN" = "1" ]; then
+        zd_log "would run: $*"
+        return 0
+    fi
+    zd_log "run: $*"
+    "$@"
+}
+
+# state file: one KEY=VALUE per line
+st_get() { [ -r "$STATE" ] && sed -n "s/^$1=//p" "$STATE" | head -n 1; }
+st_put() { echo "$1=$2" >> "$STATE"; }
+
+first_cpufreq() {
+    for _d in "$CPU_DIR"/cpu[0-9]*/cpufreq; do
+        [ -d "$_d" ] && { echo "$_d"; return 0; }
+    done
+    return 1
+}
+
+# the Ally's MCU (the built-in controller) shows up as an ASUS USB device.
+# 1abe = ROG Ally (2023), 1b4c = ROG Ally X; both are vendor 0b05.
+find_mcu() {
+    for _d in "$SYS"/bus/usb/devices/*; do
+        [ -r "$_d/idVendor" ] || continue
+        [ "$(rd "$_d/idVendor")" = "0b05" ] || continue
+        case "$(rd "$_d/idProduct")" in
+            1abe|1b4c) echo "$_d"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+wifi_iface() {
+    for _n in "$SYS"/class/net/*; do
+        [ -d "$_n/wireless" ] && { basename "$_n"; return 0; }
+    done
+    return 1
+}
+
+tdp_watts_to_mw() { echo "$(( $1 * 1000 ))"; }
+
+# clamp VALUE to an armoury knob's min_value/max_value if the kernel publishes them
+clamp_attr() {
+    _v="$1"; _mn="$(rd "$ARMOURY/$2/min_value")"; _mx="$(rd "$ARMOURY/$2/max_value")"
+    [ -n "$_mn" ] && [ "$_v" -lt "$_mn" ] 2>/dev/null && _v="$_mn"
+    [ -n "$_mx" ] && [ "$_v" -gt "$_mx" ] 2>/dev/null && _v="$_mx"
+    echo "$_v"
+}
+
+# ---- overlay (green / red brain on the user's screen) ------------------------
+# The revive runs as root with no display. We find the logged-in user's session,
+# borrow DISPLAY/WAYLAND_DISPLAY/XDG_RUNTIME_DIR from one of their desktop
+# processes and run the overlay helper as them. State goes through a file the
+# helper polls: init -> ok | fail.
+overlay_state() {
+    [ "$ZD_OVERLAY" = "on" ] || return 0
+    mkdir -p "$ZD_STATE_DIR" 2>/dev/null; chmod 755 "$ZD_STATE_DIR" 2>/dev/null
+    echo "$1" > "$ZD_STATE_DIR/overlay" 2>/dev/null; chmod 644 "$ZD_STATE_DIR/overlay" 2>/dev/null
+    return 0
+}
+
+session_user() {
+    have loginctl || return 1
+    loginctl list-sessions --no-legend 2>/dev/null | awk '{print $3}' | while read -r _u; do
+        [ -n "$_u" ] && [ "$_u" != "root" ] && { echo "$_u"; break; }
+    done
+}
+
+# env of a desktop process of USER: gamescope (game mode) first, then the shells
+session_env() {
+    # Prefer a desktop/game-mode process; else any process of the user that has
+    # an X DISPLAY. Read /proc/PID/comm directly: pgrep -x compares against the
+    # 15-character comm, so long names such as gamescope-session never match.
+    _fallback=""
+    for _pid in $(pgrep -u "$1" 2>/dev/null); do
+        _env="$(tr '\0' '\n' < "/proc/$_pid/environ" 2>/dev/null | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|XDG_SESSION_TYPE|GAMESCOPE_WAYLAND_DISPLAY)=' | tr '\n' ' ')"
+        case " $_env" in *" DISPLAY="*) ;; *) continue ;; esac
+        case "$(cat "/proc/$_pid/comm" 2>/dev/null)" in
+            steam|steamwebhelper|plasmashell|kwin_wayland|kwin_x11|gnome-shell)
+                echo "$_env"; return 0 ;;
+        esac
+        [ -z "$_fallback" ] && _fallback="$_env"
+    done
+    [ -n "$_fallback" ] && { echo "$_fallback"; return 0; }
+    return 1
+}
+
+# overlay_launch MODE [ARGS] - start the helper as the session user, detached
+overlay_launch() {
+    [ "$ZD_OVERLAY" = "on" ] || return 1
+    [ -z "$ZD_ROOT" ] || return 1                 # never in tests
+    [ -x "$ZD_LIBEXEC/zombie-deck-overlay" ] || return 1
+    _u="$(session_user)"; [ -n "$_u" ] || return 1
+    _e="$(session_env "$_u")"; [ -n "$_e" ] || return 1
+    # word-splitting of $_e is intended: one KEY=VALUE per word
+    # shellcheck disable=SC2086,SC2046
+    if have systemd-run; then
+        systemd-run --quiet --collect --no-block --unit="zombie-deck-overlay-$1-$$" \
+            --uid="$_u" --setenv=ZD_STATE_DIR="$ZD_STATE_DIR" $(printf -- '--setenv=%s ' $_e) \
+            python3 "$ZD_LIBEXEC/zombie-deck-overlay" "$@" 2>/dev/null && return 0
+    fi
+    # shellcheck disable=SC2086
+    runuser -u "$_u" -- env $_e ZD_STATE_DIR="$ZD_STATE_DIR" python3 "$ZD_LIBEXEC/zombie-deck-overlay" "$@" >/dev/null 2>&1 &
+    return 0
+}
+
+# ---- snapshot ---------------------------------------------------------------
+count_up() { mkdir -p "$ZD_LIB" 2>/dev/null; _c="$(rd "$ZD_LIB/$1")"; echo "$(( ${_c:-0} + 1 ))" > "$ZD_LIB/$1" 2>/dev/null; date '+%Y-%m-%d %H:%M:%S' > "$ZD_LIB/$1.last" 2>/dev/null; }
+
+# run_hooks pre|post - drop-in scripts for other apps (e.g. Deck Deck Goose's
+# Airlock closes its nested desktop before sleep). Every executable file in
+# /etc/zombie-deck/sleep.d runs as root, in name order, with $1 = pre | post,
+# 5 s each at most; a failing or hanging hook is logged and skipped.
+run_hooks() {
+    [ -d "$ZD_HOOKS_DIR" ] || return 0
+    for _h in "$ZD_HOOKS_DIR"/*; do
+        [ -f "$_h" ] && [ -x "$_h" ] || continue
+        if [ "$ZD_DRY_RUN" = "1" ]; then zd_log "would run hook $(basename "$_h") $1"; continue; fi
+        if have timeout; then timeout 5 "$_h" "$1" >/dev/null 2>&1; else "$_h" "$1" >/dev/null 2>&1; fi
+        _rc=$?
+        [ "$_rc" -eq 0 ] && zd_log "hook $(basename "$_h") $1: ok" || zd_log "hook $(basename "$_h") $1: failed (exit $_rc), ignored"
+    done
+    return 0
+}
+
+do_snapshot() {
+    if is_disabled; then zd_log "disabled - not taking a snapshot"; return 0; fi
+    count_up sleeps
+    run_hooks pre
+    mkdir -p "$ZD_STATE_DIR" 2>/dev/null || { zd_log "cannot create $ZD_STATE_DIR"; return 1; }
+    [ -r "$STATE" ] && cp -f "$STATE" "$STATE_PREV" 2>/dev/null
+    : > "$STATE"
+    st_put taken "$(date '+%Y-%m-%d %H:%M:%S')"
+
+    [ -r "$PROFILE_FILE" ] && st_put profile "$(rd "$PROFILE_FILE")"
+
+    if [ -d "$ARMOURY" ]; then
+        for _a in $TDP_ATTRS; do
+            _v="$(rd "$ARMOURY/$_a/current_value")"
+            [ -n "$_v" ] && st_put "tdp_$_a" "$_v"
+        done
+        # Sleeping while already a zombie: the TDP sits at the firmware default
+        # (17 W) although the previous snapshot had the user's value. Restoring
+        # 17 W would be faithful but useless, so carry the previous values forward.
+        _def="$(rd "$ARMOURY/ppt_pl1_spl/default_value")"; _now="$(st_get tdp_ppt_pl1_spl)"
+        _prev="$([ -r "$STATE_PREV" ] && sed -n 's/^tdp_ppt_pl1_spl=//p' "$STATE_PREV" | head -n 1)"
+        if [ -n "$_def" ] && [ "$_now" = "$_def" ] && [ -n "$_prev" ] && [ "$_prev" != "$_def" ]; then
+            zd_log "TDP is at the firmware default ($_def W) but was $_prev W before the last sleep - keeping $_prev W"
+            for _a in $TDP_ATTRS; do
+                _pv="$(sed -n "s/^tdp_$_a=//p" "$STATE_PREV" | head -n 1)"
+                [ -n "$_pv" ] && sed -i "s/^tdp_$_a=.*/tdp_$_a=$_pv/" "$STATE"
+            done
+        fi
+    elif have ryzenadj && [ -z "$ZD_ROOT" ]; then
+        # ryzenadj --info prints a table; keep the three limits in mW
+        ryzenadj --info 2>/dev/null | awk -F'|' '
+            /STAPM LIMIT/ {gsub(/ /,"",$3); printf "tdp_stapm=%d\n", $3*1000}
+            /PPT LIMIT FAST/ {gsub(/ /,"",$3); printf "tdp_fast=%d\n", $3*1000}
+            /PPT LIMIT SLOW/ {gsub(/ /,"",$3); printf "tdp_slow=%d\n", $3*1000}' >> "$STATE"
+    fi
+
+    _i=0
+    for _c in "$SYS"/class/drm/card[0-9]*; do
+        _f="$_c/device/power_dpm_force_performance_level"
+        [ -r "$_f" ] || continue
+        st_put "gpu_dpm_$(basename "$_c")" "$(rd "$_f")"
+        _i=$((_i + 1))
+    done
+
+    if _cf="$(first_cpufreq)"; then
+        st_put cpu_governor "$(rd "$_cf/scaling_governor")"
+        st_put cpu_epp "$(rd "$_cf/energy_performance_preference")"
+        st_put cpu_max "$(rd "$_cf/scaling_max_freq")"
+        st_put cpu_min "$(rd "$_cf/scaling_min_freq")"
+    fi
+    [ -r "$CPU_DIR/cpufreq/boost" ] && st_put cpu_boost "$(rd "$CPU_DIR/cpufreq/boost")"
+    _online="$(rd "$CPU_DIR/online")"
+    [ -n "$_online" ] && st_put cpu_online "$_online"
+
+    if _m="$(find_mcu)"; then
+        st_put mcu_path "$_m"
+        st_put mcu_parent "$(dirname "$(readlink -f "$_m" 2>/dev/null || echo "$_m")")"
+    fi
+
+    if _w="$(wifi_iface)"; then
+        st_put wifi_iface "$_w"
+        _drv="$(basename "$(readlink -f "$SYS/class/net/$_w/device/driver" 2>/dev/null)" 2>/dev/null)"
+        [ -n "$_drv" ] && st_put wifi_driver "$_drv"
+        if have nmcli && [ -z "$ZD_ROOT" ]; then
+            _con="$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | awk -F: -v d="$_w" '$2==d {print $1; exit}')"
+            [ -n "$_con" ] && st_put wifi_connection "$_con"
+        fi
+    fi
+
+    zd_log "snapshot saved to $STATE ($(wc -l < "$STATE") values)"
+}
+
+# ---- revive steps -----------------------------------------------------------
+revive_profile() {
+    [ "$ZD_PROFILE" = "off" ] && return 0
+    [ -w "$PROFILE_FILE" ] || [ "$ZD_DRY_RUN" = "1" ] || return 0
+    [ -r "$PROFILE_FILE" ] || return 0
+    _want="$ZD_PROFILE"
+    [ "$_want" = "restore" ] && _want="$(st_get profile)"
+    [ -z "$_want" ] && return 0
+    wr "$PROFILE_FILE" "$_want" "platform profile"
+}
+
+revive_tdp() {
+    [ "$ZD_TDP" = "off" ] && return 0
+    if [ -d "$ARMOURY" ]; then
+        if [ "$ZD_TDP" = "restore" ]; then
+            for _a in $TDP_ATTRS; do
+                _v="$(st_get "tdp_$_a")"
+                [ -n "$_v" ] && [ -e "$ARMOURY/$_a/current_value" ] && wr "$ARMOURY/$_a/current_value" "$(clamp_attr "$_v" "$_a")" "TDP $_a"
+            done
+        else
+            # fixed watts: sustained = W, slow = W + 2, fast = W + 5 (same shape as Steam's slider)
+            _w="$ZD_TDP"
+            [ -e "$ARMOURY/ppt_pl1_spl/current_value" ] && wr "$ARMOURY/ppt_pl1_spl/current_value" "$(clamp_attr "$_w" ppt_pl1_spl)" "TDP sustained (SPL)"
+            [ -e "$ARMOURY/ppt_pl2_sppt/current_value" ] && wr "$ARMOURY/ppt_pl2_sppt/current_value" "$(clamp_attr "$((_w + 2))" ppt_pl2_sppt)" "TDP slow (SPPT)"
+            for _fa in ppt_pl3_fppt ppt_fppt; do
+                [ -e "$ARMOURY/$_fa/current_value" ] && wr "$ARMOURY/$_fa/current_value" "$(clamp_attr "$((_w + 5))" "$_fa")" "TDP fast (FPPT)"
+            done
+        fi
+    elif have ryzenadj; then
+        if [ "$ZD_TDP" = "restore" ]; then
+            _s="$(st_get tdp_stapm)"; _f="$(st_get tdp_fast)"; _l="$(st_get tdp_slow)"
+            [ -n "$_s" ] && run ryzenadj --stapm-limit="$_s" --fast-limit="${_f:-$_s}" --slow-limit="${_l:-$_s}"
+        else
+            _mw="$(tdp_watts_to_mw "$ZD_TDP")"
+            run ryzenadj --stapm-limit="$_mw" --fast-limit="$(tdp_watts_to_mw $((ZD_TDP + 5)))" --slow-limit="$(tdp_watts_to_mw $((ZD_TDP + 2)))"
+        fi
+    else
+        zd_log "no TDP interface found (no asus-armoury attributes, no ryzenadj) - skipping TDP"
+    fi
+}
+
+revive_gpu() {
+    [ "$ZD_GPU_DPM" = "off" ] && return 0
+    for _c in "$SYS"/class/drm/card[0-9]*; do
+        _f="$_c/device/power_dpm_force_performance_level"
+        [ -r "$_f" ] || continue
+        _want="$ZD_GPU_DPM"
+        [ "$_want" = "restore" ] && _want="$(st_get "gpu_dpm_$(basename "$_c")")"
+        [ -z "$_want" ] && _want="auto"
+        wr "$_f" "$_want" "GPU DPM level ($(basename "$_c"))"
+    done
+}
+
+revive_cpu() {
+    [ "$ZD_CPU" = "off" ] && return 0
+
+    # 1. un-park: bring back any CPU that was online before sleep
+    _was="$(st_get cpu_online)"
+    quiet_begin
+    for _c in "$CPU_DIR"/cpu[0-9]*; do
+        [ -w "$_c/online" ] || [ "$ZD_DRY_RUN" = "1" ] || continue
+        [ -r "$_c/online" ] || continue
+        if [ "$(rd "$_c/online")" = "0" ]; then
+            # only if it was online before, or we have no snapshot (sanity pass)
+            if [ -z "$_was" ] || cpu_in_range "$(basename "$_c" | tr -dc 0-9)" "$_was"; then
+                wr "$_c/online" "1" "CPU $(basename "$_c") online"
+            fi
+        fi
+    done
+    quiet_end "online"
+
+    # 2. frequency limits and energy preference
+    _gov="$(st_get cpu_governor)"; _epp="$(st_get cpu_epp)"
+    _max="$(st_get cpu_max)";      _min="$(st_get cpu_min)"
+    case "$ZD_CPU" in
+        restore) ;;
+        *) _epp="$ZD_CPU" ;;
+    esac
+    quiet_begin
+    for _c in "$CPU_DIR"/cpu[0-9]*; do
+        _cf="$_c/cpufreq"
+        [ -d "$_cf" ] || continue
+        # amd-pstate "EPP 0 after resume" regression: 0 / "power" with no snapshot -> balance_performance
+        if [ -z "$_epp" ] && [ -r "$_cf/energy_performance_preference" ]; then
+            case "$(rd "$_cf/energy_performance_preference")" in
+                0|power) _epp="balance_performance" ;;
+            esac
+        fi
+        # scaling_max stuck below the hardware max (the "544 MHz zombie")
+        _hwmax="$(rd "$_cf/cpuinfo_max_freq")"
+        # a saved max below a quarter of the hardware max is the zombie itself, not a user cap
+        if [ -n "$_max" ] && [ -n "$_hwmax" ] && [ "$((_max * 4))" -lt "$_hwmax" ] 2>/dev/null; then
+            zd_log "saved max clock $((_max / 1000)) MHz looks like a stuck value - using hardware max"
+            _max="$_hwmax"
+        fi
+        if [ -z "$_max" ] && [ -n "$_hwmax" ] && [ -r "$_cf/scaling_max_freq" ]; then
+            [ "$(rd "$_cf/scaling_max_freq")" -lt "$_hwmax" ] 2>/dev/null && _max="$_hwmax"
+        fi
+        [ -n "$_gov" ] && [ -e "$_cf/scaling_governor" ] && wr "$_cf/scaling_governor" "$_gov" "governor $(basename "$_c")"
+        [ -n "$_max" ] && [ -e "$_cf/scaling_max_freq" ] && wr "$_cf/scaling_max_freq" "$_max" "max freq $(basename "$_c")"
+        [ -n "$_min" ] && [ -e "$_cf/scaling_min_freq" ] && wr "$_cf/scaling_min_freq" "$_min" "min freq $(basename "$_c")"
+        [ -n "$_epp" ] && [ -e "$_cf/energy_performance_preference" ] && wr "$_cf/energy_performance_preference" "$_epp" "EPP $(basename "$_c")"
+    done
+    quiet_end "governor / clocks / EPP"
+    _b="$(st_get cpu_boost)"
+    [ -n "$_b" ] && [ -e "$CPU_DIR/cpufreq/boost" ] && wr "$CPU_DIR/cpufreq/boost" "$_b" "CPU boost"
+}
+
+# cpu_in_range N "0-7" / "0,2-7" -> true if N is in the list
+cpu_in_range() {
+    _n="$1"
+    _found="$(echo "$2" | tr ',' '\n' | while IFS=- read -r _a _b; do
+        [ -z "$_b" ] && _b="$_a"
+        if [ "$_n" -ge "$_a" ] && [ "$_n" -le "$_b" ]; then echo yes; break; fi
+    done)"
+    [ "$_found" = "yes" ]
+}
+
+revive_controller() {
+    [ "$ZD_CONTROLLER" = "off" ] && return 0
+    _had="$(st_get mcu_path)"
+    [ -z "$_had" ] && return 0            # not an Ally, or it was already missing
+    if find_mcu >/dev/null; then
+        return 0                           # controller came back on its own
+    fi
+    zd_log "controller MCU missing after wake - re-authorising its USB hub"
+    _parent="$(st_get mcu_parent)"
+    if [ -n "$_parent" ] && [ -e "$_parent/authorized" ]; then
+        wr "$_parent/authorized" "0" "USB hub authorised" && sleep 1
+        wr "$_parent/authorized" "1" "USB hub authorised"
+    else
+        zd_log "parent hub of the MCU unknown - not touching USB (nothing else is kicked on a guess)"
+    fi
+}
+
+wifi_up() {
+    # true if the wireless interface has an IPv4 address or NM says connected
+    _w="$1"
+    if have nmcli && [ -z "$ZD_ROOT" ]; then
+        nmcli -t -f DEVICE,STATE device 2>/dev/null | grep -q "^$_w:connected" && return 0
+        return 1
+    fi
+    [ "$(rd "$SYS/class/net/$_w/operstate")" = "up" ]
+}
+
+revive_wifi() {
+    [ "$ZD_WIFI" = "off" ] && return 0
+    _w="$(st_get wifi_iface)"
+    [ -z "$_w" ] && return 0
+    [ -z "$(st_get wifi_connection)" ] && [ -z "$ZD_ROOT" ] && return 0   # wasn't connected before sleep
+    _t=0
+    while :; do
+        wifi_up "$_w" && return 0
+        [ "$_t" -ge "$ZD_WIFI_WAIT_SECONDS" ] && break
+        [ "$ZD_DRY_RUN" = "1" ] && break
+        sleep 1; _t=$((_t + 1))
+    done
+    zd_log "WiFi ($_w) not back after ${_t}s - toggling the radio"
+    if have nmcli; then
+        run nmcli radio wifi off; [ "$ZD_DRY_RUN" = "1" ] || sleep 2
+        run nmcli radio wifi on
+        _t=0
+        while [ "$_t" -lt 10 ]; do
+            [ "$ZD_DRY_RUN" = "1" ] && break
+            wifi_up "$_w" && { zd_log "WiFi back after radio toggle"; return 0; }
+            sleep 1; _t=$((_t + 1))
+        done
+    fi
+    if [ "$ZD_WIFI" = "reload" ]; then
+        _drv="$(st_get wifi_driver)"
+        if [ -n "$_drv" ]; then
+            zd_log "reloading WiFi driver $_drv"
+            run modprobe -r "$_drv" && run modprobe "$_drv"
+            have nmcli && run nmcli radio wifi on
+        fi
+    else
+        zd_log "WiFi still down; put ZD_WIFI=reload in $ZD_CONF to allow a driver reload"
+    fi
+}
+
+revive_pass() {
+    zd_log "revive pass $1"
+    revive_profile
+    revive_tdp
+    revive_gpu
+    revive_cpu
+}
+
+# verify_after - count things that are still not as wanted (compared with the
+# snapshot / config, not with absolute "ideal" values: a user on "balanced" on
+# purpose is not a zombie). WiFi is not counted; it is logged separately.
+verify_after() {
+    _bad=0
+    if [ "$ZD_PROFILE" != "off" ] && [ -r "$PROFILE_FILE" ]; then
+        _want="$ZD_PROFILE"; [ "$_want" = "restore" ] && _want="$(st_get profile)"
+        _is="$(rd "$PROFILE_FILE")"
+        if [ -n "$_want" ] && [ "$_is" != "$_want" ]; then zd_log "check: platform profile is '$_is', wanted '$_want'"; _bad=$((_bad + 1)); fi
+    fi
+    if [ "$ZD_TDP" != "off" ] && [ -r "$ARMOURY/ppt_pl1_spl/current_value" ]; then
+        if [ "$ZD_TDP" = "restore" ]; then _want="$(st_get tdp_ppt_pl1_spl)"; else _want="$(clamp_attr "$ZD_TDP" ppt_pl1_spl)"; fi
+        [ -n "$_want" ] && _want="$(clamp_attr "$_want" ppt_pl1_spl)"
+        _is="$(rd "$ARMOURY/ppt_pl1_spl/current_value")"
+        if [ -n "$_want" ] && [ "$_is" != "$_want" ]; then zd_log "check: sustained TDP is ${_is}W, wanted ${_want}W"; _bad=$((_bad + 1)); fi
+    fi
+    if [ "$ZD_CPU" != "off" ]; then
+        _want="$(st_get cpu_online)"; [ -z "$_want" ] && _want="$(rd "$CPU_DIR/possible")"
+        _is="$(rd "$CPU_DIR/online")"
+        if [ -n "$_want" ] && [ -n "$_is" ] && [ "$_is" != "$_want" ]; then zd_log "check: CPUs online '$_is', wanted '$_want'"; _bad=$((_bad + 1)); fi
+    fi
+    if [ "$ZD_CONTROLLER" != "off" ] && [ -n "$(st_get mcu_path)" ] && ! find_mcu >/dev/null; then
+        zd_log "check: built-in controller still missing"; _bad=$((_bad + 1))
+    fi
+    return "$_bad"
+}
+
+# verdict - ok / fail from failed writes and verify_after
+verdict() {
+    [ "$ZD_DRY_RUN" = "1" ] && { echo ok; return; }
+    if [ "$ZD_FAILS" -gt 0 ] || ! verify_after; then echo fail; else echo ok; fi
+}
+
+# still_current - another revive started after us (quick second sleep): stop
+still_current() { [ "$(rd "$ZD_STATE_DIR/revive_pid")" = "$$" ] || [ "$ZD_DRY_RUN" = "1" ]; }
+
+do_revive() {
+    if [ "$ZD_DRY_RUN" != "1" ] && [ -z "$ZD_ROOT" ] && [ "$(id -u)" != "0" ]; then
+        echo "zombie-deck revive needs root: sudo zombie-deck revive" >&2
+        return 1
+    fi
+    if is_disabled && [ "$ZD_DRY_RUN" != "1" ]; then zd_log "disabled - not reviving"; return 0; fi
+    mkdir -p "$ZD_STATE_DIR" 2>/dev/null
+    [ "$ZD_DRY_RUN" = "1" ] || { echo "$$" > "$ZD_STATE_DIR/revive_pid"; count_up wakes; }
+    run_hooks post
+    ZD_FAILS=0
+    overlay_state init
+    if overlay_launch show; then zd_log "overlay started for $(session_user)"; else [ "$ZD_DRY_RUN" = "1" ] || [ -n "$ZD_ROOT" ] || zd_log "overlay not started (no desktop session found or ZD_OVERLAY=off)"; fi
+    if [ ! -r "$STATE" ]; then
+        zd_log "no snapshot found - running a sanity pass with defaults"
+    else
+        zd_log "snapshot from $(st_get taken)"
+    fi
+    if [ "$ZD_DRY_RUN" != "1" ] && [ "$ZD_SETTLE_SECONDS" -gt 0 ] 2>/dev/null; then
+        sleep "$ZD_SETTLE_SECONDS"
+    fi
+    still_current || { zd_log "a newer revive took over - stopping"; return 0; }
+    _start="$(date +%s)"
+    revive_pass "1 (after ${ZD_SETTLE_SECONDS}s settle)"
+    revive_controller
+    # first verdict straight away, so the brain flashes a few seconds after
+    # wake instead of after the slow WiFi wait and the double taps
+    _first="$(verdict)"
+    zd_log "first pass: $_first"
+    overlay_state "$_first"
+    revive_wifi
+    # double taps: asusd / the EC / Steam may overwrite us once more a few seconds in
+    _n=1
+    for _at in $ZD_DOUBLE_TAP_SECONDS; do
+        _n=$((_n + 1))
+        if [ "$ZD_DRY_RUN" != "1" ]; then
+            _now="$(date +%s)"
+            _wait=$((_start + _at - _now))
+            [ "$_wait" -gt 0 ] && sleep "$_wait"
+        fi
+        still_current || { zd_log "a newer revive took over - stopping"; return 0; }
+        revive_pass "$_n (+${_at}s)"
+    done
+    _verdict="$(verdict)"
+    if [ "$_verdict" = "ok" ]; then
+        zd_log "revive done - all good"
+    else
+        zd_log "revive done - FAILED ($ZD_FAILS failed writes; run 'zombie-deck status')"
+    fi
+    if [ "$_verdict" != "$_first" ]; then
+        # a later pass changed the picture: show the final answer too
+        overlay_state "$_verdict"; overlay_launch show >/dev/null 2>&1
+    fi
+    [ "$ZD_DRY_RUN" = "1" ] || echo "$_verdict" > "$ZD_LIB/wakes.result" 2>/dev/null
+    # tell the crash guard that this boot had a revive in it
+    [ "$ZD_DRY_RUN" = "1" ] || { mkdir -p "$ZD_LIB" 2>/dev/null; echo "revived=1" >> "$ZD_LIB/boot-marker" 2>/dev/null; }
+    [ "$_verdict" = "ok" ]
+}
+
+# ---- crash guard --------------------------------------------------------------
+# zombie-deck-guard.service runs "guard" at boot and "shutdown" on a clean stop.
+# boot-marker exists at boot   -> last shutdown was not clean (crash / forced off)
+# marker says revived=1        -> Zombie-Deck had run in that boot, so it is a suspect
+# battery nearly flat at boot  -> probably ran out of power, not counted
+# two suspect crashes in a row -> ask the user (20 s, default: disable)
+guard_counter() { rd "$ZD_LIB/crashes"; }
+
+battery_flat() {
+    for _b in "$SYS"/class/power_supply/BAT*; do
+        [ -r "$_b/capacity" ] || continue
+        _c="$(rd "$_b/capacity")"
+        [ "$_c" -le 5 ] 2>/dev/null && return 0
+    done
+    # previous boot's journal mentions a critical battery action
+    if [ -z "$ZD_ROOT" ] && have journalctl; then
+        journalctl -b -1 --no-pager -q 2>/dev/null | grep -qiE 'battery.*critical|critical.*(battery|power).*(action|level)|CriticalAction|low power' && return 0
+    fi
+    return 1
+}
+
+do_disable() {
+    mkdir -p "$ZD_ROOT/etc/zombie-deck" "$ZD_LIB" 2>/dev/null
+    [ -z "$ZD_ROOT" ] && have systemctl && systemctl disable "$ZD_SLEEP_UNIT" >/dev/null 2>&1
+    echo "disabled $(date '+%Y-%m-%d %H:%M:%S') $1" > "$ZD_ROOT/etc/zombie-deck/disabled"
+    echo 0 > "$ZD_LIB/crashes" 2>/dev/null
+    zd_log "Zombie-Deck DISABLED ($1): sleep hook switched off, system back to stock behaviour. 'sudo zombie-deck enable' turns it back on."
+}
+
+do_enable() {
+    [ -z "$ZD_ROOT" ] && have systemctl && systemctl enable "$ZD_SLEEP_UNIT" >/dev/null 2>&1
+    rm -f "$ZD_ROOT/etc/zombie-deck/disabled"
+    mkdir -p "$ZD_LIB" 2>/dev/null; echo 0 > "$ZD_LIB/crashes" 2>/dev/null
+    zd_log "Zombie-Deck enabled: sleep hook active again"
+}
+
+is_disabled() { [ -e "$ZD_ROOT/etc/zombie-deck/disabled" ]; }
+
+# ask the user: returns 0 = keep, 1 = disable (timeout or no UI = disable)
+guard_ask() {
+    [ -z "$ZD_ROOT" ] || return 1
+    _t=0
+    while [ "$_t" -lt "$ZD_GUARD_SESSION_WAIT" ]; do
+        _u="$(session_user)"
+        [ -n "$_u" ] && session_env "$_u" >/dev/null 2>&1 && break
+        sleep 5; _t=$((_t + 5))
+    done
+    [ -n "$_u" ] || { zd_log "no desktop session appeared in ${ZD_GUARD_SESSION_WAIT}s - nobody to ask"; return 1; }
+    _e="$(session_env "$_u")"
+    # shellcheck disable=SC2086
+    runuser -u "$_u" -- env $_e ZD_STATE_DIR="$ZD_STATE_DIR" timeout "$((ZD_GUARD_PROMPT_SECONDS + 10))" \
+        python3 "$ZD_LIBEXEC/zombie-deck-overlay" prompt "$ZD_GUARD_PROMPT_SECONDS" "$(guard_counter)"
+}
+
+do_guard() {
+    [ "$ZD_GUARD" = "on" ] || return 0
+    mkdir -p "$ZD_LIB" 2>/dev/null || return 0
+    _n="$(guard_counter)"; _n="${_n:-0}"
+    if [ -r "$ZD_LIB/boot-marker" ]; then
+        if grep -q '^revived=1' "$ZD_LIB/boot-marker" 2>/dev/null; then
+            if battery_flat; then
+                zd_log "last shutdown was not clean but the battery is flat - not counting it"
+            else
+                _n=$((_n + 1))
+                zd_log "last shutdown was not clean and Zombie-Deck had revived in that boot - suspect crash $_n"
+            fi
+        else
+            zd_log "last shutdown was not clean, but Zombie-Deck did not run in that boot - not counted"
+            _n=0
+        fi
+    else
+        _n=0
+    fi
+    echo "$_n" > "$ZD_LIB/crashes"
+    # new marker for this boot (removed by a clean shutdown)
+    echo "boot=$(rd "$ZD_ROOT/proc/sys/kernel/random/boot_id") $(date '+%Y-%m-%d %H:%M:%S')" > "$ZD_LIB/boot-marker"
+    if [ "$_n" -ge 2 ]; then
+        zd_log "two suspect crashes in a row - asking whether to keep Zombie-Deck (${ZD_GUARD_PROMPT_SECONDS}s, default: disable)"
+        if guard_ask; then
+            zd_log "user chose to keep Zombie-Deck active; counter reset"
+            echo 0 > "$ZD_LIB/crashes"
+        else
+            do_disable "two unclean shutdowns in a row"
+        fi
+    fi
+    return 0
+}
+
+do_shutdown() {
+    rm -f "$ZD_LIB/boot-marker" 2>/dev/null
+    echo 0 > "$ZD_LIB/crashes" 2>/dev/null
+    return 0
+}
+
+# ---- status -----------------------------------------------------------------
+mark() { if [ "$1" = "ok" ]; then printf '  [ OK ] %s\n' "$2"; else printf '  [ !! ] %s\n' "$2"; ZOMBIE=1; fi; }
+
+# ---- json (for Deck Deck Goose and other front ends) --------------------------
+jstr() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
+jnum() { case "$1" in ''|*[!0-9]*) printf 'null' ;; *) printf '%s' "$1" ;; esac; }
+
+do_json() {
+    _armed=false
+    if [ -z "$ZD_ROOT" ] && have systemctl; then
+        systemctl is-enabled "$ZD_SLEEP_UNIT" >/dev/null 2>&1 \
+            && systemctl show -p Wants --value sleep.target 2>/dev/null | grep -qw "$ZD_SLEEP_UNIT" && _armed=true
+    elif ! is_disabled; then
+        _armed=true
+    fi
+    _dis=false; is_disabled && _dis=true
+    _zombie=false; do_status >/dev/null 2>&1 || _zombie=true
+    printf '{"app":"zombie-deck","version":%s,"build":%s,' "$(jstr "$ZD_VERSION")" "$(jstr "$ZD_BUILD_DATE")"
+    printf '"armed":%s,"disabled":%s,"zombie_now":%s,' "$_armed" "$_dis" "$_zombie"
+    printf '"sleeps":%s,"wakes":%s,' "$(jnum "$(rd "$ZD_LIB/sleeps")")" "$(jnum "$(rd "$ZD_LIB/wakes")")"
+    printf '"last_sleep":%s,"last_wake":%s,"last_result":%s,' "$(jstr "$(rd "$ZD_LIB/sleeps.last")")" \
+        "$(jstr "$(rd "$ZD_LIB/wakes.last")")" "$(jstr "$(rd "$ZD_LIB/wakes.result")")"
+    printf '"crash_streak":%s,"overlay":%s,"guard":%s,' "$(jnum "$(guard_counter)")" "$(jstr "$ZD_OVERLAY")" "$(jstr "$ZD_GUARD")"
+    printf '"tdp_watts":%s,"profile":%s,"log":%s}\n' "$(jnum "$(rd "$ARMOURY/ppt_pl1_spl/current_value")")" \
+        "$(jstr "$(rd "$PROFILE_FILE")")" "$(jstr "$ZD_LOG")"
+}
+
+do_status() {
+    ZOMBIE=0
+    echo "Zombie-Deck $ZD_VERSION (built $ZD_BUILD_DATE)"
+    echo "Config: $ZD_CONF  Snapshot: $([ -r "$STATE" ] && st_get taken || echo none)"
+    if is_disabled; then
+        echo "  [ !! ] Zombie-Deck is DISABLED ($(cat "$ZD_ROOT/etc/zombie-deck/disabled")) - 'sudo zombie-deck enable' to re-arm"
+    else
+        _cr="$(guard_counter)"
+        if [ -z "$ZD_ROOT" ] && have systemctl; then
+            if systemctl is-enabled "$ZD_SLEEP_UNIT" >/dev/null 2>&1 && systemctl show -p Wants --value sleep.target 2>/dev/null | grep -qw "$ZD_SLEEP_UNIT"; then
+                mark ok "sleep hook armed (sleep.target wants $ZD_SLEEP_UNIT); suspect crashes in a row: ${_cr:-0}"
+            else
+                mark bad "sleep hook NOT armed - run: sudo zombie-deck enable"
+            fi
+        else
+            echo "  [ -- ] suspect crashes in a row: ${_cr:-0}"
+        fi
+    fi
+    _sl="$(rd "$ZD_LIB/sleeps")"; _wk="$(rd "$ZD_LIB/wakes")"
+    echo "  [ -- ] sleeps seen: ${_sl:-0} (last $(rd "$ZD_LIB/sleeps.last")), revives run: ${_wk:-0} (last $(rd "$ZD_LIB/wakes.last"), result: $(rd "$ZD_LIB/wakes.result"))"
+    echo
+    _p="$(rd "$PROFILE_FILE")"
+    if [ -n "$_p" ]; then
+        _pw="$ZD_PROFILE"; [ "$_pw" = "restore" ] && _pw="$(st_get profile)"; [ -z "$_pw" ] || [ "$_pw" = "off" ] && _pw="$_p"
+        [ "$_p" = "$_pw" ] && mark ok "platform profile: $_p" || mark bad "platform profile: $_p (wanted $_pw; Steam's TDP slider only works on 'performance')"
+    else
+        echo "  [ -- ] platform profile: not available"
+    fi
+    if [ -d "$ARMOURY" ]; then
+        _s="$(rd "$ARMOURY/ppt_pl1_spl/current_value")"; _sp="$(rd "$ARMOURY/ppt_pl2_sppt/current_value")"; _f="$(rd "$ARMOURY/ppt_pl3_fppt/current_value")"; [ -z "$_f" ] && _f="$(rd "$ARMOURY/ppt_fppt/current_value")"
+        _want="$(st_get tdp_ppt_pl1_spl)"
+        if [ -n "$_want" ] && [ "$_want" != "$_s" ]; then
+            mark bad "TDP: sustained ${_s}W slow ${_sp}W fast ${_f}W (snapshot said ${_want}W)"
+        else
+            mark ok "TDP: sustained ${_s}W slow ${_sp}W fast ${_f}W (asus-armoury)"
+        fi
+    elif have ryzenadj && [ -z "$ZD_ROOT" ]; then
+        mark ok "TDP: $(ryzenadj --info 2>/dev/null | awk -F'|' '/STAPM LIMIT/{gsub(/ /,"",$3); print $3"W"}') (ryzenadj)"
+    else
+        echo "  [ -- ] TDP: no interface found"
+    fi
+    for _c in "$SYS"/class/drm/card[0-9]*; do
+        _f="$_c/device/power_dpm_force_performance_level"
+        [ -r "$_f" ] || continue
+        _v="$(rd "$_f")"
+        [ "$_v" = "auto" ] && mark ok "GPU $(basename "$_c") DPM: $_v" || mark bad "GPU $(basename "$_c") DPM: $_v"
+    done
+    _on="$(rd "$CPU_DIR/online")"; _poss="$(rd "$CPU_DIR/possible")"
+    if [ -n "$_on" ]; then
+        [ "$_on" = "$_poss" ] && mark ok "CPUs online: $_on" || mark bad "CPUs online: $_on of $_poss (parked cores)"
+    fi
+    if _cf="$(first_cpufreq)"; then
+        _epp="$(rd "$_cf/energy_performance_preference")"
+        case "$_epp" in
+            0|power) mark bad "CPU energy preference: $_epp (stuck in power-save)" ;;
+            "") ;;
+            *) mark ok "CPU energy preference: $_epp" ;;
+        esac
+        _max="$(rd "$_cf/scaling_max_freq")"; _hw="$(rd "$_cf/cpuinfo_max_freq")"
+        if [ -n "$_max" ] && [ -n "$_hw" ]; then
+            [ "$_max" -ge "$_hw" ] 2>/dev/null && mark ok "CPU max clock: $((_max / 1000)) MHz" || mark bad "CPU max clock: $((_max / 1000)) MHz (hardware allows $((_hw / 1000)))"
+        fi
+    fi
+    if [ -n "$(st_get mcu_path)" ] || find_mcu >/dev/null; then
+        find_mcu >/dev/null && mark ok "controller MCU present on USB" || mark bad "controller MCU missing from USB"
+    fi
+    if _w="$(wifi_iface)"; then
+        wifi_up "$_w" && mark ok "WiFi $_w connected" || mark bad "WiFi $_w not connected"
+    fi
+    echo
+    if [ "$ZOMBIE" = "1" ]; then
+        echo "Verdict: ZOMBIE - run 'sudo zombie-deck revive' to bring it back."
+        return 2
+    fi
+    echo "Verdict: alive and well."
+}
+
+# ---- main -------------------------------------------------------------------
+ZD_MODE="${1:-status}"
+case "$ZD_MODE" in
+    snapshot) do_snapshot ;;
+    revive)   do_revive ;;
+    test)     ZD_DRY_RUN=1; ZD_MODE="test"; do_revive ;;
+    status)   do_status ;;
+    json)     do_json ;;
+    log)      [ -r "$ZD_LOG" ] && tail -n 60 "$ZD_LOG" || echo "no log yet at $ZD_LOG" ;;
+    guard)    do_guard ;;
+    shutdown) do_shutdown ;;
+    enable)   do_enable ;;
+    disable)  do_disable "by user" ;;
+    --version|-V|version) echo "Zombie-Deck $ZD_VERSION (built $ZD_BUILD_DATE)" ;;
+    *)
+        echo "Zombie-Deck $ZD_VERSION (built $ZD_BUILD_DATE)"
+        echo "usage: zombie-deck status | json | revive | test | snapshot | log | enable | disable | --version"
+        [ "$ZD_MODE" = "-h" ] || [ "$ZD_MODE" = "--help" ] || [ "$ZD_MODE" = "help" ] || exit 1
+        ;;
+esac
