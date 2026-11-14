@@ -431,8 +431,7 @@ def list_games(include_missing_libraries: bool = False) -> List[Game]:
         count[g.appid] = count.get(g.appid, 0) + 1
     for g in games:
         if count[g.appid] > 1:
-            g.extra["problem"] = ("it is installed in %d libraries at once; let Steam sort that out "
-                                  "(or delete one copy) first" % count[g.appid])
+            g.extra["problem"] = ("installed in %d libraries at once: delete one copy (button below)" % count[g.appid])
     games.sort(key=lambda g: (g.tool, g.name.lower()))
     return games
 

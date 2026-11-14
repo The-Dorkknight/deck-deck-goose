@@ -4,6 +4,55 @@ Every build of this project, newest first, with the main code changes in each. R
 only the last three builds in git history, so older builds live on here (and in CHANGELOG.md).
 Written by `tools/history_log.py`; entries are never removed.
 
+## 0.6.7-wip: Airlock touch-mode button (Mouse / Native touch / Trackpad / Right-click) (2026-11-14)
+
+- 14 files changed, 876 insertions(+), 14 deletions(-)
+- Main code changes:
+  - `tests/test_touchmode.py` +271 -0
+  - `src/ddg/touchmode.py` +251 -0
+  - `src/ddg/touchbutton.py` +251 -0
+  - `src/ddg/airlock.py` +59 -7
+  - `src/ddg/webui.py` +10 -2
+  - `tests/test_airlock.py` +6 -1
+  - `src/ddg/airlock_data/nested-session.sh` +5 -0
+  - `src/ddg/__init__.py` +1 -1
+  - `setup.py` +1 -1
+
+## 0.6.6-wip: Delete this copy / Uninstall, visible reasons on greyed-out game buttons (2026-11-13)
+
+- 12 files changed, 364 insertions(+), 13 deletions(-)
+- Main code changes:
+  - `src/ddg/uninstall.py` +151 -0
+  - `tests/test_delete_game.py` +150 -0
+  - `src/ddg/webui.py` +43 -5
+  - `src/ddg/steam.py` +1 -2
+  - `src/ddg/shelf/steam.py` +1 -2
+  - `src/ddg/__init__.py` +1 -1
+  - `setup.py` +1 -1
+
+## 0.6.5-wip: Airlock controller support (pad drives mouse and keyboard through uinput), Controller and Pointer speed options (2026-11-10)
+
+- 13 files changed, 846 insertions(+), 18 deletions(-)
+- Main code changes:
+  - `src/ddg/padbridge.py` +498 -0
+  - `tests/test_padbridge.py` +245 -0
+  - `src/ddg/airlock.py` +38 -6
+  - `src/ddg/webui.py` +15 -2
+  - `src/ddg/__main__.py` +8 -2
+  - `tests/test_airlock.py` +3 -2
+  - `src/ddg/__init__.py` +2 -2
+  - `setup.py` +1 -1
+
+## 0.6.4-wip: Airlock at about 720p from the real panel size, Wayland connection with X11 fallback, size/connection choices (2026-11-10)
+
+- 11 files changed, 253 insertions(+), 22 deletions(-)
+- Main code changes:
+  - `src/ddg/airlock.py` +147 -15
+  - `tests/test_airlock.py` +63 -0
+  - `src/ddg/webui.py` +9 -1
+  - `src/ddg/__init__.py` +2 -2
+  - `setup.py` +1 -1
+
 ## 0.6.3-wip: one-step install (app menu + Game Mode tiles), fix Game Mode browser going offline (2026-11-08)
 
 - 13 files changed, 246 insertions(+), 16 deletions(-)

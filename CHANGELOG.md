@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.7-wip - 2026-11-14
+- **Report from the Ally: mouse weirdness in Airlock** (a tap clicks, holding does nothing, dragging a folder brings up a menu). Gamescope decides what a finger does from `STEAM_TOUCH_CLICK_MODE`, which Steam sets; Airlock did not control it.
+- **Touch-mode button** (new `src/ddg/touchmode.py`, `src/ddg/touchbutton.py`): a small square in the Airlock desktop's top-left corner cycles **Mouse** (tap clicks, drag works) / **Native touch** / **Trackpad** / **Right-click**, with a popup naming the mode. Drawn with libX11 through ctypes and its own pixel font: no new packages.
+- **It never follows you out:** Steam's value is saved when Airlock opens and restored when it closes (normal close, Back to Game, Steam's *Exit game* signal, errors); a hard kill is repaired at the next Airlock or Deck Deck Goose start. Started only on the nested desktop's own display, never on gamescope's, and only in Game Mode. The last pick is remembered for the next Airlock only. Airlock tab: **Touch button** on/off.
+- Tests: against two real X servers (Xvfb standing in for gamescope's Xwayland and the nested desktop): property round trip, save and restore, never-set-before case, crash repair, bad requests, the real button clicked with XTest cycling Touch > Trackpad > Right-click > Mouse, the start-up guard, and a whole Airlock run with a stand-in KWin. Not run on the Ally.
+
+## 0.6.6-wip - 2026-11-13
+- **Report from the Ally: on the Games tab "nothing is clickable", and there is no way to delete a duplicate game.** The buttons were greyed out for good reasons (Steam open, a drive that cannot compress, a game installed in two libraries), but the reason only appeared as a hover tooltip, which a touchscreen never shows. Each card now lists **why** its buttons are off, in plain text.
+- **Delete this copy** (new `src/ddg/uninstall.py`): for a game installed in two libraries, removes only the copy on that card (manifest backed up first, then game folder, shader cache, workshop files of that library). Keeps its Proton prefix (saves) and never touches the other copy. Steam must be closed; refused if both copies point at the same folder; a folder shared with another app is kept. Works with the Linux and the Windows/Mac backends.
+- **Uninstall** for a game installed once: hands it to Steam's own uninstaller (`steam://uninstall/<id>`), which asks to confirm.
+- **Fix found while adding it:** each card looked up its game by app id only, so both cards of a duplicate pointed at the first copy. Cards now carry the library too.
+- Any script error in the page now shows a red message instead of failing silently.
+- Tests: 262 (simulated Steam), including a browser test that clicks *Delete this copy* on the second card and checks the right copy went. Not run on the Ally.
+
+## 0.6.5-wip - 2026-11-10
+- **Airlock: controller now works (second report: touch worked, d-pad, sticks and buttons did nothing).** New `src/ddg/padbridge.py`: while Airlock is open it finds the pad in `/proc/bus/input/devices`, reads its events, and drives a virtual mouse and keyboard made through `/dev/uinput`, which Game Mode passes to the Airlock window like any plugged-in mouse. Left stick = mouse, right stick = scroll, A/RT = left click, X/LT = right click, B = Esc, Y = Super (Start menu), d-pad = arrows, LB/RB = Backspace/Tab, Menu = Enter, View = Alt+Tab, L3 = middle click. Dead zone and a curve for small precise moves; sleeps until the pad moves (125 wakeups a second only while a stick is held); picks up pads that appear late; lets go of every key if the pad disappears or Airlock closes.
+- Airlock tab: **Controller** on/off, **Pointer speed**, a line saying whether a pad is seen and whether `/dev/uinput` is usable, and an **Allow controller** button (pkexec, one time) when it is not. `ddg airlock pad` and `ddg airlock pad --watch`. New log code `AEPD`.
+- B (Esc) and Y (Super) also give the pad a way to close the Start-menu popup that stayed open; the popup itself is not fixed.
+- Not run on the Ally. The virtual-device code needs `/dev/uinput`, which the build machine lacks, so it was tested with pipes standing in for the pad and a recording stand-in for the virtual devices.
+
+## 0.6.4-wip - 2026-11-10
+- **Airlock is smoother and readable (second real run on the Ally: ~20 fps, dropped frames, tiny icons).**
+  - Size now comes from the built-in screen (kernel `/sys/class/drm`), not from Game Mode's X11 server, which could report a bigger virtual screen. New default *Bigger & faster*: about 720p (1280x720 on the Ally, aspect kept, smaller screens untouched), scaled up by Game Mode: 1.5x bigger icons, ~2.25x fewer pixels per frame. *Sharp* = full resolution, or `resolution = WIDTHxHEIGHT` in `portal.ini`.
+  - New Wayland connection straight to gamescope (`--wayland-display`), tried first, with automatic fallback to the X11 route within the same attempt; the one that worked is remembered.
+  - The Airlock tab has *Desktop size* and *Connection* choices and shows the last size, connection and whether KWin drew on the GPU or the CPU (detected from KWin's own log).
+- Known issue noted: the Start-menu popup in Airlock stays open until pressed again.
+
 ## 0.6.3-wip - 2026-11-08
 - **Fix (real ROG Ally, Game Mode): the Deck Deck Goose tile opened the browser, which said the page needed the internet.** The page is served on the handheld itself (127.0.0.1), but Firefox (a Flatpak) found no network-status service in Game Mode, switched itself to offline mode and refused even local pages. The tile's Firefox profile now turns automatic offline mode, connectivity checks and proxies off, and the launcher rewrites these settings every time (old profiles kept the old ones). Chromium-type browsers start with `--no-proxy-server`. Browser output goes to `~/.local/share/deck-deck-goose/gamemode-browser.log`. Not yet confirmed on the Ally.
 - **One-step install:** new `DeckDeckGoose-Install-Linux.sh`, an **Install / Update / Repair** card at the top of the window, and `ddg install-app` / `uninstall-app`. They copy the program (and the bundled Zombie-Deck) to `~/.local/share/deck-deck-goose`, add **Deck Deck Goose** to the app menu and add both Game Mode tiles. No password; Desktop Mode only.

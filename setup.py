@@ -4,7 +4,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="deck-deck-goose",
-    version="0.6.3-wip",
+    version="0.6.7-wip",
     description="A logical This PC folder (disks, Users, Documents) for Linux file managers, plus a Steam game manager (move, clean, compress)",
     author="Matthew Armstrong",
     author_email="The-Dorkknight@users.noreply.github.com",

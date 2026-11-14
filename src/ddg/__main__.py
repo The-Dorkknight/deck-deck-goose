@@ -61,8 +61,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     gmp = sub.add_parser("gamemode", help="add or remove the Deck Deck Goose and Airlock tiles in Steam's Game Mode")
     gmp.add_argument("action", choices=["add", "remove", "status"])
     al = sub.add_parser("airlock", help="open a desktop in a window inside Game Mode (game keeps running)")
-    al.add_argument("action", choices=["start", "stop", "status", "plan", "probe", "sleep-hook", "back-entry", "cleanup"])
-    al.add_argument("value", nargs="?", default="", help="sleep-hook: on|off; probe: --live")
+    al.add_argument("action", choices=["start", "stop", "status", "plan", "probe", "sleep-hook", "back-entry", "cleanup", "pad"])
+    al.add_argument("value", nargs="?", default="", help="sleep-hook: on|off; probe: --live; pad: --watch")
     al.add_argument("--force", action="store_true", help="start: allow it from Desktop Mode (to try it out)")
     al.add_argument("--live", action="store_true", help="probe: also open a 10-second test window")
     kb = sub.add_parser("osk", help="KDE on-screen keyboard for Desktop Mode")
@@ -142,6 +142,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0 if ok else 1
         if a.action == "back-entry":
             return _print_steps([airlock.write_back_launcher()])
+        if a.action == "pad":
+            from . import padbridge
+            if a.value == "--watch":
+                return padbridge.watch()
+            print(_json.dumps(padbridge.check(), indent=1))
+            return 0
         if a.value not in ("on", "off"):
             p.error("airlock sleep-hook needs on or off")
         return _print_steps(airlock.sleep_hook(a.value == "on"))

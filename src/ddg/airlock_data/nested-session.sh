@@ -56,5 +56,10 @@ esac
 
 touch "$ready"
 back_button &
+# Touch-mode button (top-left). Only on the nested desktop's own Xwayland: if KWin started without one, DISPLAY is
+# still gamescope's, and the button must never appear there (it would land in Game Mode itself).
+if [ "${DDG_TOUCH_BUTTON:-}" = 1 ] && [ -n "${DISPLAY:-}" ] && [ "${DISPLAY}" != "${DDG_OUTER_DISPLAY:-}" ] && [ -n "${DDG_PY:-}" ]; then
+  PYTHONPATH="${DDG_SRC:-}${PYTHONPATH:+:$PYTHONPATH}" "$DDG_PY" -m ddg.touchbutton &
+fi
 wait "$child"
 # ready file is left for the watchdog; ddg/airlock.py removes it

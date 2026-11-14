@@ -7,6 +7,7 @@ import stat
 import sys
 import threading
 import time
+import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -72,8 +73,49 @@ class Pure(unittest.TestCase):
         self.assertEqual(old[-1], "/x/n.sh")
         self.assertNotIn("--exit-with-session", old)
 
+    def test_backends_and_wayland_command(self):
+        det = dict(FULL, gamescope_wayland="gamescope-0")
+        self.assertEqual(airlock.backends(det, {"backend": "auto"}), ["wayland", "x11"])
+        self.assertEqual(airlock.backends(det, {"backend": "x11"}), ["x11", "wayland"])
+        self.assertEqual(airlock.backends(FULL, {"backend": "wayland"}), ["x11"])      # no gamescope socket
+        cmd = airlock.build_kwin_cmd(det, 1280, 720, "/x/n.sh", "wayland")
+        self.assertIn("--wayland-display", cmd)
+        self.assertNotIn("--x11-display", cmd)
+        cmd = airlock.build_kwin_cmd(det, 1280, 720, "/x/n.sh", "x11")
+        self.assertEqual(cmd[cmd.index("--x11-display") + 1], ":0")
+
+    def test_screen_size_from_panel_not_xwayland(self):
+        """Real Ally: the desktop opened at a big virtual size and the icons were tiny."""
+        with tempfile.TemporaryDirectory() as d:
+            drm = Path(d)
+            for name, st, modes in (("card1-DP-1", "disconnected", ""), ("card1-HDMI-A-1", "connected", "2560x1440\n"),
+                                    ("card1-eDP-1", "connected", "1920x1080\n1280x720\n")):
+                (drm / name).mkdir()
+                (drm / name / "status").write_text(st + "\n")
+                (drm / name / "modes").write_text(modes)
+            with mock.patch.dict(os.environ, {"DDG_DRM_DIR": d}):
+                self.assertEqual(airlock.panel_size(), (1920, 1080))          # the built-in screen wins
+                self.assertEqual(airlock.screen_size({"resolution": "auto"}), (1280, 720))
+                self.assertEqual(airlock.screen_size({"resolution": "native"}), (1920, 1080))
+                self.assertEqual(airlock.screen_size({"resolution": "1600x900"}), (1600, 900))
+                self.assertEqual(airlock.screen_size({"width": "800", "height": "600"}), (800, 600))
+                (drm / "card1-eDP-1" / "modes").write_text("1920x1200\n")    # 16:10 screen keeps its shape
+                self.assertEqual(airlock.screen_size({"resolution": "auto"}), (1280, 800))
+                (drm / "card1-eDP-1" / "modes").write_text("1280x800\n")     # Steam Deck: already small
+                self.assertEqual(airlock.screen_size({"resolution": "auto"}), (1280, 800))
+
+    def test_drawing_detection(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "n.log"
+            f.write_text("kwin_scene_opengl: OpenGL vendor string: AMD\n")
+            self.assertEqual(airlock._drawing(f), "gpu")
+            f.write_text("kwin_core: Initializing QPainter compositing\n")
+            self.assertEqual(airlock._drawing(f), "software")
+            f.write_text("OpenGL renderer string: llvmpipe (LLVM 17)\n")
+            self.assertEqual(airlock._drawing(f), "software")
+
     def test_errcodes_documented(self):
-        self.assertEqual(len(airlock.ERRCODES), 14)
+        self.assertEqual(len(airlock.ERRCODES), 15)
         self.assertTrue(all(len(k) == 4 for k in airlock.ERRCODES))
 
     def test_data_files_ship(self):
@@ -179,6 +221,33 @@ class Ladder(SteamBase):
             r = airlock.cleanup()
         self.assertEqual(r["closed"], ["plasmashell 5"])
         self.assertEqual(self.table(), {})
+
+    def test_wayland_failure_falls_back_to_x11_in_the_same_mode(self):
+        script(self.t / "kwin_wayland", 'for last; do :; done\nfor a; do [ "$a" = --wayland-display ] && '
+               '{ echo "no xdg_wm_base"; exit 1; }; done\nexec "$last"\n')
+        self.app_sleeping(1.2)
+        r = airlock.start(det=dict(self.det, gamescope_wayland="gamescope-0"))
+        self.assertEqual((r["code"], r["mode"], r["tried"]), ("A0OK", "lite", ["lite"]))
+        self.assertEqual(airlock.read_state()["backend"], "x11")
+        self.assertEqual((airlock.state_dir() / "backend").read_text(), "x11")
+        text = airlock.log_file().read_text()
+        self.assertIn("lite via wayland failed, trying x11", text)
+        self.assertIn("no xdg_wm_base", (airlock.state_dir() / "nested-lite.log").read_text())   # both tries kept
+        # next time X11 (the one that worked) goes first
+        self.assertEqual(airlock.backends(dict(self.det, gamescope_wayland="gamescope-0"), {"backend": "auto"})[0], "x11")
+
+    def test_options_saved(self):
+        self.assertEqual(airlock.set_options(resolution="native", backend="x11"), {"resolution": "native", "backend": "x11",
+                                                                                "pad": "on", "pad_speed": "normal",
+                                                                            "touch_button": "on", "touch": "steam"})
+        self.assertEqual(airlock.set_options(touch_button="off")["touch_button"], "off")
+        self.assertIn("error", airlock.set_options(touch_button="maybe"))
+        self.assertIn("error", airlock.set_options(touch="99"))
+        self.assertEqual(airlock.set_options(touch="6")["touch"], "6")
+        self.assertIn("min_ram", airlock.conf_path().read_text())        # the rest of portal.ini is kept
+        self.assertIn("error", airlock.set_options(resolution="huge"))
+        self.assertIn("error", airlock.set_options(backend="vnc"))
+        self.assertEqual(airlock.status()["options"]["resolution"], "native")
 
     def test_quick_close_is_still_success(self):
         self.app_sleeping(1.2)          # exits right after it appeared: not a failure

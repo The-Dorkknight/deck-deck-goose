@@ -20,9 +20,10 @@ from typing import Optional
 
 from . import __build_date__, __version__, core, gamemode, osk, sound
 from . import library as steam
+from . import uninstall
 from pathlib import Path
 
-from . import airlock, zombie
+from . import airlock, padbridge, zombie
 from .jobs import RUNNER
 
 ASSETS = Path(__file__).resolve().parent / "assets"
@@ -50,7 +51,7 @@ button,select,input[type=search]{font:inherit;border:1px solid var(--line);backg
 button{cursor:pointer}select{max-width:100%}
 button.primary{background:var(--accent);border-color:var(--accent);color:#04101f;font-weight:700;box-shadow:var(--glow)}
 button.amber{background:#f5a623;border-color:#f5a623;color:#1a1000;font-weight:700}
-button:disabled,select:disabled{opacity:.5;cursor:not-allowed}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
+button:disabled,select:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(1);box-shadow:none}button.primary:disabled,button.amber:disabled{background:var(--chip);border-color:var(--line);color:var(--ink)}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
 .ok{color:var(--ok)}.bad{color:var(--bad)}.mute{color:var(--mute)}small{color:var(--mute)}
 .tabs{display:flex;gap:6px;margin:12px 0 4px;border-bottom:1px solid var(--line)}
 .tabs button{border:0;border-bottom:3px solid transparent;border-radius:0;background:none;font-weight:600;color:var(--mute);padding:.5em 1em}
@@ -78,7 +79,10 @@ body.gm button,body.gm select,body.gm input[type=search]{min-height:48px;font-si
 body.gm .acts button{font-size:.95rem;min-height:48px}body.gm .grid{grid-template-columns:repeat(auto-fill,minmax(240px,1fr))}
 body.gm input[type=checkbox]{width:28px;height:28px}
 .note{background:var(--chip);border-radius:8px;padding:.4em .7em;font-size:.88rem}
-</style></head><body><main>
+.why{font-size:.82rem;color:var(--mute);margin-top:6px;line-height:1.35}.why b{color:var(--ink)}
+button.del{border-color:#d9534f;color:#ff8f8b}button.del:not(:disabled):hover{background:#d9534f;color:#fff}
+#pageerr{display:none;background:#5a1010;color:#ffd6d6;border:2px solid #ff7b7b;border-radius:10px;padding:.7em 1em;margin:10px 0}
+</style></head><body><main><div id="pageerr"></div>
 <h1 class="sr">Deck Deck Goose</h1>
 <img class="hero" src="/assets/hero.webp" alt="Deck Deck Goose: a cyborg goose carrying a Steam Deck">
 <div id="band"><i></i><span id="bandtxt">Checking mode...</span></div>
@@ -146,9 +150,15 @@ body.gm input[type=checkbox]{width:28px;height:28px}
 <section id="tab-airlock" hidden>
 <div class="card"><h2>Airlock: a desktop inside Game Mode</h2>
 <p class="mute" style="margin-top:0">Tap the <b>Airlock</b> tile in Steam's Game Mode and a KDE desktop opens in a window. Your game and Steam keep running underneath. Close the desktop (or press <b>Back to Game</b>) and you are straight back, with no logout and no reboot.</p>
-<div class="note">Work in progress: written from documentation and tested only with stand-ins, not yet on a real handheld. Run <b>Check this device</b> first and send me the result.</div>
+<div class="note">Work in progress: works on a ROG Ally with Bazzite (tested twice); smoothness, Start-menu popup and other handhelds still being worked on. If something looks wrong, run <b>Check this device</b> and send me the result.</div>
 <div id="alinfo" class="mute" style="margin-top:8px">Checking...</div>
 <div class="row"><button class="amber" id="alopen">Open Airlock</button><button id="alstop">Back to Game</button><button id="alprobe">Check this device</button><button id="alclean" title="Closes desktop programs an earlier Airlock left running">Close leftovers</button></div>
+<div class="row" style="align-items:center;gap:10px;flex-wrap:wrap"><label>Desktop size <select id="alres"><option value="auto">Bigger &amp; faster (about 720p)</option><option value="native">Sharp (screen's full resolution)</option></select></label>
+<label>Connection <select id="albk"><option value="auto">Automatic (smoothest that works)</option><option value="wayland">Wayland (direct)</option><option value="x11">X11 (older, proven)</option></select></label><small id="alsz" class="mute"></small></div>
+<div class="row" style="align-items:center;gap:10px;flex-wrap:wrap"><label>Controller <select id="alpad"><option value="on">Moves the mouse (on)</option><option value="off">Off</option></select></label>
+<label>Pointer speed <select id="alspd"><option value="slow">Slow</option><option value="normal">Normal</option><option value="fast">Fast</option></select></label>
+<label>Touch button <select id="altouch"><option value="on">On (top-left in Airlock)</option><option value="off">Off</option></select></label>
+<button id="alpadfix" style="display:none">Allow controller (asks for your password once)</button><small id="alpd" class="mute"></small></div>
 <h3>If the nested desktop can't open, it tries, in order</h3>
 <ol id="alplan" class="mute"></ol>
 <small>It never restarts your handheld by itself. The step that closes your game (real Desktop Mode) always asks first.</small>
@@ -180,6 +190,9 @@ const TOKEN="__TOKEN__";const GM=__GM__;const PLATFORM="__PLATFORM__";const LINU
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let gone=false;
+function pageerr(m){const e=$('pageerr');if(!e)return;e.style.display='block';e.innerHTML='<b>Something went wrong in this page:</b> '+esc(m)+' <button type="button" onclick="location.reload()">Reload</button><br><small>Please send a photo of this message.</small>';}
+window.addEventListener('error',ev=>pageerr((ev.message||'script error')+(ev.lineno?' (line '+ev.lineno+')':'')));
+window.addEventListener('unhandledrejection',ev=>pageerr(String(ev.reason&&ev.reason.message||ev.reason)));
 function stopped(){if(gone)return;gone=true;document.body.innerHTML='<main><h1>Deck Deck Goose</h1><div class="card"><h2>Deck Deck Goose has stopped</h2><p>Its window was closed, or it stopped after this tab was left asleep for a long time. Nothing is lost: start it again to carry on.</p></div></main>';}
 async function api(path,body){let r;try{r=await fetch(path,{method:body?'POST':'GET',headers:{'X-Token':TOKEN,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});}catch(e){stopped();throw e;}return r.json();}
 function steps(list){$('resultsCard').style.display='block';$('results').innerHTML=rows(list);}
@@ -235,6 +248,21 @@ function renderSteam(){
  if($('gmdel'))$('gmdel').onclick=()=>{if(confirm('Remove the Deck Deck Goose and Airlock tiles from Steam? Steam is closed for a moment.'))startJob('/api/gamemode/remove',{});};
  if($('closesteam'))$('closesteam').onclick=async()=>{$('closesteam').disabled=true;$('closesteam').textContent='Closing...';const r=await api('/api/steam/close',{});if(!r.ok)alert(r.detail);loadGames();};
 }
+const dup=g=>G.games.filter(x=>x.appid===g.appid).length;
+/* Why a button is greyed out, as visible text: a touchscreen never shows hover tooltips. */
+function whyNot(g,anyok){const w=[];
+ if(dup(g)>1){const where=G.games.filter(x=>x.appid===g.appid).map(x=>x.drive+' ('+x.size+')').join(' and ');
+  w.push('<b>Installed twice</b>: '+esc(where)+'. Move and Compress stay off until one copy is gone. Delete the copy you do not want'+(GM?' (in Desktop Mode: Steam must be closed).':G.running?' (close Steam first).':'.'));}
+ else if(g.state_text)w.push('<b>'+esc(g.state_text)+'</b>: finish that in Steam first.');
+ if(!g.state_text){
+  if(GM)w.push('Move: use Steam &gt; Settings &gt; Storage in Game Mode.');
+  else if(G.running)w.push('Move: close Steam first.');
+  else if(!anyok){const t=(g.targets||[])[0];w.push('Move: '+(t?esc(t.why.split('.')[0]):'no other drive found')+'.');}
+  if(!g.can_compress)w.push('Compress: '+need()+'.');
+  else if(!g.compressed&&!g.estimate)w.push('Compress: press Estimate first.');
+  else if(g.estimate&&g.estimate.directstorage)w.push('Compress: DirectStorage game, leave it uncompressed.');
+  else if(g.estimate&&g.estimate.verdict==='not worth it')w.push('Compress: would save too little.');}
+ return w;}
 function renderGames(){
  const q=$('q').value.toLowerCase(),tools=$('showtools').checked;
  let list=G.games.filter(g=>(tools||!g.tool)&&g.name.toLowerCase().includes(q));
@@ -242,7 +270,7 @@ function renderGames(){
  $('games').innerHTML=list.length?list.map(g=>{
   const opts=g.targets.map(t=>`<option value="${esc(t.path)}" title="${esc(t.path)}" ${t.ok?'':'disabled'}>${esc(t.label)}${t.ok?'':' ('+esc(t.why.split('.')[0])+')'}</option>`).join('');
   const anyok=g.targets.some(t=>t.ok);
-  return `<article class="game" data-id="${g.appid}">
+  return `<article class="game" data-id="${g.appid}" data-lib="${esc(g.library)}">
   <div class="art"><div class="ini" style="background:hsl(${hue(g.name)} 45% 38%)">${esc(initials(g.name))}</div>${g.art?`<img loading="lazy" alt="" src="/api/art/${g.appid}?k=${TOKEN}" onerror="this.remove()">`:''}</div>
   <div class="meta"><b>${esc(g.name)}</b><small>${esc(g.size)} &middot; ${esc(g.drive)}</small>
   <div class="chips">${g.state_text?`<span class="chip w">${esc(g.state_text)}</span>`:''}${g.compressed?`<span class="chip g">compressed${g.compressed.saved?': saved '+gb(g.compressed.saved):''}</span>`:''}${g.tool?'<span class="chip">tool</span>':''}${est(g)}</div></div>
@@ -250,13 +278,18 @@ function renderGames(){
   <div class="row">${GM?'':`<button class="mv primary" ${anyok&&!g.state_text&&!G.running?'':'disabled'}>Move</button>`}
   <button class="es" ${g.can_compress&&!g.compressed&&!g.state_text?'':'disabled'} title="${g.can_compress?'Read-only check: how much would compressing save?':need()}">Estimate</button>
   <button class="cp" ${g.can_compress&&!g.compressed&&!g.state_text&&g.estimate&&g.estimate.verdict!=='not worth it'&&!g.estimate.directstorage?'':'disabled'} title="${!g.can_compress?need():!g.estimate?'Press Estimate first':g.estimate.directstorage?'DirectStorage game: leave uncompressed':g.estimate.verdict==='not worth it'?'Would save too little':LINUX?'Compress with btrfs zstd':'Compress with Windows compression'}">Compress</button>
-  ${g.compressed&&!LINUX?`<button class="un" ${G.running?'disabled':''}>Uncompress</button>`:''}</div></div></article>`;}).join(''):'<p class="mute">No games found.</p>';
+  ${g.compressed&&!LINUX?`<button class="un" ${G.running?'disabled':''}>Uncompress</button>`:''}
+  ${dup(g)>1?`<button class="del" ${G.running||GM?'disabled':''}>Delete this copy</button>`:`<button class="unin">Uninstall</button>`}</div>
+  <div class="why">${whyNot(g,anyok).map(x=>'&bull; '+x).join('<br>')}</div></div></article>`;}).join(''):'<p class="mute">No games found.</p>';
  document.querySelectorAll('.game').forEach(card=>{
-  const g=G.games.find(x=>x.appid===card.dataset.id);
+  const g=G.games.find(x=>x.appid===card.dataset.id&&x.library===card.dataset.lib);
   if(card.querySelector('.mv'))card.querySelector('.mv').onclick=()=>{const sel=card.querySelector('.target');const t=g.targets.find(x=>x.path===sel.value);
    if(!t||!t.ok)return;if(confirm(`Move ${g.name} (${g.size}) to ${t.path}?\n\n${LINUX?'Its Proton saves, shader cache and workshop items go with it.':'Its shader cache and workshop items go with it. Saves outside the game folder are not affected.'} Steam must stay closed until this finishes.`))startJob('/api/games/move',{appid:g.appid,target:t.path});};
   card.querySelector('.es').onclick=()=>startJob('/api/games/estimate',{appid:g.appid,algo:algo()});
   card.querySelector('.cp').onclick=()=>{if(confirm(`Compress ${g.name} with ${LINUX?'btrfs (zstd)':algo()}? Estimated saving: ${gb(g.estimate.saved)}. Files that would not shrink are skipped.\n\n${LINUX?'The game still runs normally. If you keep btrfs snapshots of this drive, compressing can use MORE space until old snapshots are deleted.':'The game still runs normally. Files Steam later updates are stored uncompressed again.'}`))startJob('/api/games/compress',{appid:g.appid,algo:algo()});};
+  const del=card.querySelector('.del');if(del)del.onclick=()=>{const other=G.games.filter(x=>x.appid===g.appid&&x.library!==g.library).map(x=>x.drive).join(', ');
+   if(confirm(`Delete the copy of ${g.name} on ${g.drive} (${g.size})?\n\nThis removes Steam's record of this copy, its game folder, shader cache and workshop files in that library. Its Proton prefix (saves) is kept.\n\nThe copy on ${other} is not touched.`))startJob('/api/games/delete',{appid:g.appid,library:g.library});};
+  const unin=card.querySelector('.unin');if(unin)unin.onclick=async()=>{if(!confirm(`Uninstall ${g.name}?\n\nThis opens Steam's own uninstaller, which asks you to confirm. If Steam is closed it starts first.`))return;const r=await api('/api/games/uninstall',{appid:g.appid});steps([r]);};
   const un=card.querySelector('.un');if(un)un.onclick=()=>{if(confirm(`Store ${g.name} uncompressed again? This uses about ${gb((g.compressed||{}).saved||0)} more space.`))startJob('/api/games/uncompress',{appid:g.appid});};
  });
 }
@@ -317,7 +350,18 @@ async function al(){const [o,p]=await Promise.all([api('/api/airlock/status'),ap
  $('alopen').textContent=o.session==='game'?'Open Airlock':'Try Airlock from here';$('alopen').disabled=open;$('alstop').disabled=!open;
  const names={full:'Full KDE desktop in a window (game keeps running)',lite:'Just a file manager and terminal (uses less memory)',switch:'Real Desktop Mode (your game closes; asks first)',advise:'Show how to switch by hand'};
  $('alplan').innerHTML=p.modes.map(m=>'<li>'+esc(names[m]||m)+'</li>').join('')+p.notes.map(n=>'<li class="bad">'+esc(n)+'</li>').join('');
+ const op=o.options||{};$('alres').value=['auto','native'].includes(op.resolution)?op.resolution:'auto';$('albk').value=op.backend||'auto';
+ const L=o.last||{};$('alsz').textContent='Opens at '+(op.size||'?')+(op.panel&&op.panel!=='0x0'?' (screen '+op.panel+')':'')+(L.backend?'. Last time: '+L.backend+(L.size?' at '+L.size:'')+(L.drawing==='software'?', drawn on the CPU (slow)':L.drawing==='gpu'?', drawn on the graphics chip':''):'');
+ $('alpad').value=op.pad==='off'?'off':'on';$('altouch').value=op.touch_button==='off'?'off':'on';$('altouch').title='Starts in: '+(o.touch_label||'');$('alspd').value=op.pad_speed||'normal';
+ const P=o.pad||{};let pt;if(P.uinput==='ok')pt=(P.pads&&P.pads.length)?'Controller seen: '+P.pads.join(', ')+'. A=click, X/LT=right-click, left stick=mouse, right stick=scroll, B=Esc, Y=Start menu, d-pad=arrows.':'No controller seen right now (it appears once Steam starts it).';else pt=P.uinput==='missing'?'The system has no /dev/uinput, so the controller cannot drive the desktop.':'This app may not write /dev/uinput yet, so the controller cannot drive the desktop.';
+ $('alpd').textContent=pt+(L.pad?' Last time: '+L.pad+'.':'');$('alpadfix').style.display=P.uinput==='ok'?'none':'';
  try{const s=await api('/api/airlock/sleephook');$('alsleep').checked=s.installed;}catch(e){}}
+$('alres').onchange=async()=>{await api('/api/airlock/options',{resolution:$('alres').value});al();};
+$('alpad').onchange=async()=>{await api('/api/airlock/options',{pad:$('alpad').value});al();};
+$('altouch').onchange=async()=>{await api('/api/airlock/options',{touch_button:$('altouch').value});al();};
+$('alspd').onchange=async()=>{await api('/api/airlock/options',{pad_speed:$('alspd').value});al();};
+$('alpadfix').onclick=async()=>{const r=await alact('/api/airlock/padaccess');if(r&&r.message)$('alsteps').innerHTML='<tr><td class="'+(r.ok?'ok':'bad')+'">'+esc(r.message)+'</td></tr>';};
+$('albk').onchange=async()=>{await api('/api/airlock/options',{backend:$('albk').value});al();};
 async function alact(path,body){document.querySelectorAll('#tab-airlock button,#alsleep').forEach(b=>b.disabled=true);
  try{const r=await api(path,body||{});if(Array.isArray(r))$('alsteps').innerHTML=rows(r);return r;}finally{document.querySelectorAll('#tab-airlock button,#alsleep').forEach(b=>b.disabled=false);await al();band();}}
 $('alopen').onclick=async()=>{const r=await alact('/api/airlock/start',{force:!GM&&true});if(r&&r.message)$('alsteps').innerHTML='<tr><td class="mute">'+esc(r.message)+'</td></tr>';};
@@ -528,6 +572,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/airlock/start":
                 airlock.spawn_start(force=bool(b.get("force")))
                 return self._json({"ok": True, "message": "Starting... the colour bar at the top turns amber when it is open."})
+            if path == "/api/airlock/options":
+                return self._json(airlock.set_options(resolution=b.get("resolution"), backend=b.get("backend"),
+                                                          pad=b.get("pad"), pad_speed=b.get("pad_speed"),
+                                                          touch_button=b.get("touch_button")))
+            if path == "/api/airlock/padaccess":
+                ok, msg = padbridge.grant_access()
+                return self._json({"ok": ok, "message": msg, "pad": padbridge.check()})
             if path == "/api/airlock/cleanup":
                 return self._json(airlock.cleanup())
             if path == "/api/airlock/stop":
@@ -571,6 +622,17 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/junk/clean":
                 ids = [str(i) for i in b.get("ids", [])]
                 return self._start("Cleaning junk", lambda j: steam.clean_junk(ids, j))
+            if path == "/api/games/uninstall":
+                return self._json(uninstall.open_steam_uninstaller(str(b.get("appid", ""))).as_dict())
+            if path == "/api/games/delete":
+                appid, lib = str(b.get("appid", "")), str(b.get("library", ""))
+                g = uninstall.find_copy(appid, lib) if appid.isdigit() and lib else None
+                if not g:
+                    return self._json({"error": "That copy was not found (the list may be out of date: press Look again)."})
+                why = uninstall.check_delete_copy(g)
+                if why:
+                    return self._json({"error": why})
+                return self._start("Deleting a copy of %s" % g.name, lambda j: uninstall.delete_copy(g, j))
             if path in ("/api/games/move", "/api/games/compress", "/api/games/estimate", "/api/games/uncompress"):
                 g = _game_or_none(str(b.get("appid", "")))
                 if not g:
@@ -601,6 +663,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(open_browser: bool = True, url_file: str = "") -> int:
+    try:                                   # an Airlock killed too hard to restore Steam's touch mode: fix it now
+        from . import touchmode
+        touchmode.repair_stale()
+    except Exception:  # noqa: BLE001
+        pass
     srv = _Server(("127.0.0.1", 0), Handler)
     srv.token = secrets.token_urlsafe(24)
     url = "http://127.0.0.1:%d/" % srv.server_address[1]

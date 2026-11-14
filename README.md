@@ -1,4 +1,4 @@
-# Deck Deck Goose 0.6.3-wip
+# Deck Deck Goose 0.6.7-wip
 
 ![Deck Deck Goose: a cyborg goose riding a flying Steam Deck over a neon city](docs/images/deck-deck-goose.webp)
 
@@ -64,9 +64,47 @@ Only the Games tab, from the same engine as the sibling GameShelf project. Diffe
 
 ![The Airlock tab: what it does, Open Airlock, Back to Game, the fallback order](docs/images/gui-airlock.webp)
 
+**How it works (not a video stream):** Airlock starts a second copy of KDE's window manager (KWin) as a window inside Game Mode. It draws a real Plasma desktop, live, and gamescope (Game Mode's screen manager) puts that window on screen like a game. Each frame is drawn twice, which is why it is a little less smooth than Desktop Mode.
+
+**Smoothness and size (0.6.4):**
+- **Desktop size:** *Bigger & faster* (default) opens the desktop at about 720p (1280x720 on the Ally) and lets Game Mode scale it up: icons and text 1.5x bigger, and far fewer pixels to draw each frame. *Sharp* uses the screen's full resolution. Earlier versions asked X11 for the size and could get a bigger virtual screen than the panel, which made everything tiny.
+- **Connection:** *Automatic* first connects straight to gamescope over Wayland (one copy less per frame), and falls back to the older X11 route by itself if that doesn't work; whichever worked is remembered.
+- The Airlock tab shows which size and connection were used last time, and whether KWin drew on the graphics chip or on the CPU (CPU drawing caps it near 20 fps; send `nested-full.log` if you see it).
+- Steam treats the Airlock tile as a game, so its Quick Access **Performance** settings (frame limit, refresh rate, power limit) apply to it too. Untick any frame limit there for the Airlock tile.
+
+**Controller (0.6.5):** touch worked in Airlock but the d-pad, sticks and buttons did nothing. In Game Mode Steam hands the Airlock tile a *gamepad*, and the nested desktop only understands mouse, keyboard and touch. Airlock now reads the pad itself and types for it through a virtual mouse and keyboard (`/dev/uinput`), only while Airlock is open:
+
+| Pad | Does |
+|---|---|
+| Left stick | Mouse |
+| Right stick | Scroll |
+| A or RT | Left click (hold to drag) |
+| X or LT | Right click |
+| B | Esc (closes menus and the Start menu) |
+| Y | Super key (opens and closes the Start menu) |
+| D-pad | Arrow keys |
+| LB / RB | Backspace / Tab |
+| Menu / View | Enter / Alt+Tab |
+| Left stick click | Middle click |
+
+The Airlock tab has **Controller** (on/off) and **Pointer speed**, and shows whether a pad is seen. If the system won't let the app write `/dev/uinput`, the tab offers **Allow controller** (a one-time password window; adds a udev rule). `ddg airlock pad` shows what is detected; `ddg airlock pad --watch` prints what the pad sends for 15 seconds. Prefer Steam's own layout? Switch *Controller* off and give the Airlock tile *Gamepad with Mouse Trackpad* or *Keyboard (WASD) and Mouse* in Steam. The Steam, Quick Access and Guide buttons stay with Steam. **Not yet run on the Ally**; the layout is my choice, tell me what you'd change.
+
 Ported from the separate *Airlock workbench* prototype. **Status: work in progress, written from documentation and tested only with stand-ins; it has not run on a real ROG Ally yet.**
 
 Tap the **Airlock** tile in Game Mode. It starts a second, nested KWin compositor as a window inside gamescope, with its own D-Bus session so it cannot clash with Steam's, and runs Plasma in it. Your game and Steam keep running underneath. To leave: close the desktop, or open **Back to Game** from its app menu (add it with the Airlock tab > *Add "Back to Game"*), or Steam button > Exit game.
+
+**Touch-mode button (0.6.7):** a small square in the top-left corner of the Airlock desktop. Tap it to cycle what a finger on the screen does; a popup in the middle says which mode is on, and the letter on the button shows it afterwards:
+
+| Letter | Mode | What a finger does |
+|---|---|---|
+| **M** | Mouse | Tap clicks, **drag works** (moving folders). Right-click with X or LT on the pad. |
+| **T** | Native touch | Real touch; press and hold for the right-click menu. |
+| **P** | Trackpad | Slide to move the pointer, tap to click. |
+| **R** | Right-click | Every tap right-clicks (tap **M** again afterwards). |
+
+![The touch-mode button and its popup for each mode (simulated screens)](docs/images/airlock-touch-button.webp)
+
+It changes gamescope's touch setting (`STEAM_TOUCH_CLICK_MODE`, which Steam normally sets) and **never follows you out**: Airlock saves Steam's own value when it opens and puts it back when it closes, however it closes. If Airlock is killed too hard to do that, the next Airlock or Deck Deck Goose start puts it back. The button only exists inside Airlock (never in the real Desktop Mode or Game Mode), and only in Game Mode. Airlock remembers the last mode you picked for the next Airlock. Steam can change the setting itself, for example while its menu is open; the button shows the real mode within a couple of seconds, so tap it again if needed. Switch it off in the Airlock tab (**Touch button**). In Dolphin, dropping a folder on another asks *Move Here / Copy Here / Link Here*: that menu is normal. **Not yet run on the Ally.**
 
 **If it can't open, it tries these in order** (and tells you which): 1. full Plasma desktop in the window; 2. *lite* (just Dolphin and Konsole, for less memory); 3. a real switch to Desktop Mode via `steamos-session-select` (**closes your game, so it always asks first; no answer counts as No**); 4. instructions for switching by hand. It **never reboots or logs you out by itself**.
 
@@ -122,11 +160,17 @@ Split window: Dolphin and Nemo split with **F3**; Double Commander and Krusader 
 
 ## Games tab (Steam)
 
+The buttons are on each game's card; tapping the card itself does nothing. When a button is greyed out, the card now says why in plain text underneath (for example *Move: close Steam first*, *Compress: needs a btrfs drive*, *Installed twice*), because a touchscreen never shows hover tips.
+
+![Game cards with the reason under each greyed-out button, and Delete this copy on a game installed twice (simulated library)](docs/images/gui-games-reasons.webp)
+
 | What | How |
 |---|---|
 | **Find games** | Reads Steam's own files: native Steam (`~/.local/share/Steam`) and Flatpak Steam, every library listed in `libraryfolders.vdf`, and each `appmanifest_<id>.acf`. Proton and the Steam runtimes are hidden unless you tick *Show Proton and runtimes*. |
 | **Pictures** | Uses artwork Steam has already downloaded (newer per-game folders in `appcache/librarycache/<id>/…`, the older `<id>_library_600x900.jpg` files, and custom art you set in Steam). Nothing is downloaded. Games without a picture get coloured initials. |
 | **Move** | Pick a drive and press **Move**. The game folder, its **Proton prefix (where Windows games keep saves)**, shader cache and workshop items are copied, every file is compared, Steam's library list is updated (a new `SteamLibrary` folder is created and registered if the drive has none), and only then is the old copy deleted. On the same drive it is an instant rename. |
+| **Delete this copy** | Shown when a game is **installed twice** (in two libraries), which blocks Move and Compress. Deletes only the copy on that card: Steam's record of it (`appmanifest`, a backup is kept in `~/.config/deck-deck-goose/deleted-manifests/`), its game folder, shader cache and workshop files in that library. Its **Proton prefix (saves) is kept**, and the other copy is never touched. Steam must be closed (Desktop Mode). Refused if both copies point at the same folder. |
+| **Uninstall** | For a game installed once: opens **Steam's own uninstaller** (`steam://uninstall/<id>`), which asks you to confirm. Deck Deck Goose deletes nothing itself here. |
 | **Clear junk** | Scans for shader caches of uninstalled games, old download leftovers, Steam's web cache and logs, unfinished copies, game folders and Proton prefixes left behind by uninstalls. Safe items are ticked. Items that may hold saves or mods are not, and are marked. |
 | **Estimate** | On a **btrfs** drive, a read-only check of how much compressing would save. It reads a few small samples of each file (64 MB at most per game, so even a big game takes seconds) and shows e.g. *save ~9 GB (19%) · worth it* or *not worth it*. |
 | **Compress** | Unlocks after Estimate, unless the verdict was *not worth it*. Works with Steam open, as long as that game isn't running. Compresses **only the files that will actually shrink** with zstd (`btrfs filesystem defragment -czstd`), and sets the folder so future updates are compressed too. Not available on ext4, NTFS or exFAT, which have no such feature here. |
@@ -183,12 +227,16 @@ python3 -m ddg install|check|refresh|uninstall|disks|--version
 * Edge cases covered by tests: unsafe or empty folder names in manifests (cannot reach outside Steam's folders), duplicate installs, Unicode names, RAM-disk, read-only and missing targets, read-only game folders, a full disk mid-copy, unreadable files, a cross-subvolume rename falling back to copying, broken or missing library lists, junk that is a symlink to your own files, and two windows at once.
 * The estimate uses zlib as a stand-in for zstd on Python before 3.14. Measured on sample data, it comes out equal to or slightly below what zstd achieves, so it errs on the low side. Detecting already-compressed parts uses the Linux FIEMAP call; it was checked on ext4 (reports nothing compressed) but not on a real btrfs drive.
 * **Game Mode tile:** the launcher was run for real here, end to end, with a small script standing in for the browser (it loaded the page in Game Mode layout and pressed Back to Steam, which closed everything). Adding the shortcut was tested against Steam's binary shortcut file format as documented, **not with a real Steam client or a real Game Mode session**. Whether Firefox's kiosk mode and the touchscreen behave well under Game Mode needs your Ally.
-* **Airlock, first real run (ROG Ally, Bazzite, 2026-11-07):** it opened a desktop from Game Mode, but the full desktop did not count as started, the simple one (Dolphin) opened on top of it, and the full one could not be closed without logging out. 0.6.1 closes such leftovers; *why* the full desktop failed is still being found out from the logs.
+* **Airlock, first real run (ROG Ally, Bazzite, 2026-11-07):** it opened a desktop from Game Mode, but the full desktop did not count as started, the simple one (Dolphin) opened on top of it, and the full one could not be closed without logging out. 0.6.1 closes such leftovers. **Second real run (2026-11-09):** works as expected and quick enough for general management, but around 20 fps with dropped frames, tiny icons (needed 150-200% scaling) and the Start-menu (Kickoff) popup stayed open until its button was pressed again. 0.6.4 adds the Wayland connection and the 720p default; the Start-menu issue is not fixed yet (see Known issues).
 * **Airlock:** tested with a stand-in `kwin_wayland` script and stand-in apps: the full ladder (opens and closes cleanly, compositor dying at once, hung start killed by the watchdog, second Airlock refused, switch asks first and *no* means no, Back to Game closes it), the hooks, the lock, the sleep hook install/remove, the web API and the colour bar. **Never run with a real KWin, gamescope or Game Mode session.**
 * **Sound:** tested against a stand-in for `pactl` that copies the ROG Ally layout described by the Bazzite wiki (an EQ output over the Family speakers, plus HDMI, a USB headset and Bluetooth), and a sample `pw-dump`. **Not run on a real Ally**: the real output names may differ, and Steam in Game Mode may pull a boosted volume back to 100% when you move its slider.
 * **On-screen keyboard:** tested against example `kwinrc` files and a simulated package manager only; not on a real KDE session, and the real `pkexec dnf install` has not been run.
 * **Not yet tested**: against a real Steam client (does it pick up the moved game without fuss?), real Flatpak Steam, real btrfs compression (no btrfs was available to the build machine; the btrfs commands are standard ones, see the research notes), Dolphin and Nemo sidebar entries, and any real Bazzite, Nobara or Mint machine. The GitHub workflows have not been run.
 * The screenshots show invented games with generated covers and simulated sizes and estimates.
+
+## Known issues
+
+* **Airlock: the Start menu (Kickoff) stays open** until its button is pressed again (seen on the Ally, 0.6.1-0.6.3). Probably how touches and clicks outside a popup reach the nested desktop; to be checked with the Wayland connection in 0.6.4. Workaround: press the Start button again, or press Esc (B on the pad closes it, since 0.6.5). Touch is the only input tried so far.
 
 ## Troubleshooting
 
@@ -201,6 +249,7 @@ python3 -m ddg install|check|refresh|uninstall|disks|--version
 | Compress fails with "Operation not permitted" | The files are not owned by you. Run `sudo btrfs filesystem defragment -r -czstd "<game folder>"` once. |
 | A row in *Check* is red: auto-refresh timer | `systemctl --user status ddg-refresh.timer`. Without systemd user sessions, press Install again after disk changes. |
 | Still quiet after Fix quiet sound | Try 115% then 130%. Check `ddg sound status`: the output marked `*` is the one in use. If the Family device isn't listed, open an issue with that output. |
+| Pad does nothing in Airlock | Airlock tab > the line under *Controller* says what is wrong. "Cannot write /dev/uinput": press **Allow controller**. "No controller seen": run `ddg airlock pad --watch` in Desktop Mode and press buttons; send me the output. If you gave the tile a mouse layout in Steam, switch *Controller* off. Log: `portal.log`, code `AEPD`. |
 | Airlock opens nothing | Read `~/.local/state/deck-deck-goose/portal.log` (short codes) and run `ddg airlock probe --live`. Open an issue with the probe file. |
 | Dolphin shows no *This PC* entry | Close Dolphin, press Install, open Dolphin. A backup is kept as `user-places.xbel.thispc-backup`. |
 | Something went wrong with Steam's library list | Backups are kept next to it as `libraryfolders.vdf.thispc-backup` (from before the first change). Close Steam and copy it back. |
