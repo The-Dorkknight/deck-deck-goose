@@ -1,4 +1,6 @@
 # Deck Deck Goose 0.6.7-wip
+# WARNING DONT INSTALL YET!!!!!!!!!!!!!
+POSSIBLY HAS A BUG WHICH DISABLES BAZZITE DESKTOP MODE, THO I SUSPECT IT IS MORE LIKELEY ANOTHER APP IM WORKING ON( BAZZITE DEEP SLEEP) CAUSING THE ISSUE
 
 ![Deck Deck Goose: a cyborg goose riding a flying Steam Deck over a neon city](docs/images/deck-deck-goose.webp)
 
