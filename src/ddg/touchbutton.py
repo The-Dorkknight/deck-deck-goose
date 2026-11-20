@@ -85,7 +85,7 @@ def text_px(text: str) -> int:
 
 
 class Button:
-    BG, FG, EDGE, POP_BG = 0x10213A, 0xEAF4FF, 0x5CC8FF, 0x0B1A2E
+    BG, FG, EDGE, POP_BG, LOCK = 0x10213A, 0xEAF4FF, 0x5CC8FF, 0x0B1A2E, 0xFFB23F
 
     def __init__(self, display: Optional[str] = None, demo: bool = False):
         self.lib = _lib()
@@ -99,6 +99,8 @@ class Button:
         self.size = max(44, min(96, self.sw // 26))
         self.scale = max(2, self.size // 9)                    # one big letter fills the button
         self.mode: Optional[int] = None
+        self.locked = False
+        self.last_msg = ""
         self.btn = self._window(6, 6, self.size, self.size, "Airlock touch mode")
         self.pop = self._window(0, 0, 10, 10, "Airlock touch mode popup")
         self.gc_b = self.lib.XCreateGC(self.dpy, self.btn, 0, None)
@@ -132,10 +134,11 @@ class Button:
     def draw_button(self):
         s, n = self.scale, self.size
         lib, gc = self.lib, self.gc_b
-        lib.XSetForeground(self.dpy, gc, self.EDGE)
+        edge = max(2, n // 16) * (2 if self.locked else 1)
+        lib.XSetForeground(self.dpy, gc, self.LOCK if self.locked else self.EDGE)   # thick amber frame = locked
         lib.XFillRectangle(self.dpy, self.btn, gc, 0, 0, n, n)
         lib.XSetForeground(self.dpy, gc, self.BG)
-        lib.XFillRectangle(self.dpy, self.btn, gc, 2, 2, n - 4, n - 4)
+        lib.XFillRectangle(self.dpy, self.btn, gc, edge, edge, n - 2 * edge, n - 2 * edge)
         letter = touchmode.MODES.get(self.mode, ("", "?", ""))[1] if self.mode is not None else "S"
         self._text(self.btn, gc, letter, (n - 5 * s) // 2, (n - 7 * s) // 2, s, self.FG)
         lib.XFlush(self.dpy)
@@ -174,15 +177,31 @@ class Button:
         if self.demo:
             return
         try:
-            t = touchmode.current_file().read_text().strip()
-            m = int(t) if t.isdigit() else None
+            c = touchmode.parse_current(touchmode.current_file().read_text())
         except OSError:
-            m = self.mode
-        if m != self.mode:
-            self.mode = m
+            return
+        if (c["mode"], c["locked"]) != (self.mode, self.locked):
+            self.mode, self.locked = c["mode"], c["locked"]
             self.draw_button()
 
+    def read_message(self) -> None:
+        """Popups the supervisor asks for (gestures, refusals)."""
+        if self.demo:
+            return
+        try:
+            t = touchmode.message_file().read_text()
+        except OSError:
+            return
+        if t and t != self.last_msg:
+            self.last_msg = t
+            parts = t.rstrip("\n").split("\t")
+            self.read_current()
+            self.show_popup([p for p in parts[1:3] if p] or ["?"])
+
     def tap(self) -> None:
+        if self.locked:
+            self.show_popup(["Locked", "Four fingers down to unlock"])
+            return
         want = touchmode.next_mode(self.mode)
         name, _, what = touchmode.MODES[want]
         if self.demo:
@@ -199,7 +218,7 @@ class Button:
         while time.time() < deadline:
             time.sleep(0.05)
             try:
-                if touchmode.current_file().read_text().strip() == str(want):
+                if touchmode.parse_current(touchmode.current_file().read_text())["mode"] == want:
                     self.mode = want
                     self.draw_button()
                     self.show_popup([name, what])
@@ -230,6 +249,7 @@ class Button:
                 self.lib.XUnmapWindow(self.dpy, self.pop)
                 self.pop_lines = []
                 self.lib.XFlush(self.dpy)
+            self.read_message()
             if now - last_raise > 2:                            # new windows must not cover the button
                 self.read_current()
                 self.lib.XRaiseWindow(self.dpy, self.btn)

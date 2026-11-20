@@ -39,6 +39,8 @@ class BinaryVdf(unittest.TestCase):
 class Tile(SteamBase):
     def setUp(self):
         super().setUp()
+        from ddg import airlock
+        airlock._set_enabled(True)          # both tiles; the opt-in itself is tested in test_airlock_optin.py
         self.user = self.root / "userdata/12345678/config"
         self.user.mkdir(parents=True)
         (self.root / "userdata/0").mkdir()            # anonymous folder: must be ignored

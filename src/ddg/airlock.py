@@ -35,7 +35,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from . import __build_date__, __version__, core, gamemode, padbridge, touchmode
+from . import __build_date__, __version__, core, desktopguard, gamemode, padbridge, touchgesture, touchmode
 from .core import Step
 
 APP = "deck-deck-goose"
@@ -60,6 +60,8 @@ ERRCODES = {
     "ABNO": "user said no to the session switch",
     "ACDP": "no display to nest into (DISPLAY / GAMESCOPE_WAYLAND_DISPLAY unset)",
     "ADST": "closed desktop programs left behind by Airlock",
+    "ADGR": "put the real desktop's settings / session environment back after Airlock",
+    "AENA": "Airlock is not enabled yet (two sanity checks in Desktop Mode first)",
     "AEPD": "controller bridge not running (the pad will not move the mouse)",
 }
 
@@ -75,6 +77,9 @@ DEFAULTS = {
     "pad": "on",               # controller drives the mouse/keyboard inside Airlock (on | off)
     "pad_speed": "normal",     # slow | normal | fast
     "touch_button": "on",      # small touch-mode button in the Airlock desktop's top-left corner (Game Mode only)
+    "enabled": "no",           # Airlock is opt-in: Enable Airlock (two sanity checks) sets yes
+    "touch_lock": "on",        # touch mode locked at start: four fingers down unlocks, three-finger double tap cycles
+    "gestures": "on",          # read the touchscreen for those two gestures (read-only)
     "touch": "steam",          # touch mode Airlock starts in: steam (leave Steam's) or the last one picked (1,2,4,6)
     "lite_apps": "dolphin konsole",
     "allow_session_switch": "yes",
@@ -363,6 +368,10 @@ def run_hooks(mode: str) -> None:
 
 
 def notify(det: dict, title: str, body: str) -> None:
+    # Never in Game Mode: a desktop notification there can start a notification service that draws its own window on
+    # gamescope's display, outside Airlock (a second "Airlock" window for Steam; UI escaping into Steam's menu).
+    if det.get("session") == "game":
+        return
     if det.get("notify_send"):
         try:
             subprocess.Popen([det["notify_send"], "-a", "Deck Deck Goose", title, body],
@@ -624,18 +633,22 @@ def launch_nested(kind: str, det: dict, cfg) -> str:
     Tries each way of reaching gamescope (Wayland, then X11) before giving up on this mode."""
     order = backends(det, cfg) or ["x11"]
     code = "A4EX"
-    for i, backend in enumerate(order):
-        code = _launch_once(kind, det, cfg, backend, first=(i == 0))
-        if code == "A0OK":
-            try:
-                (state_dir() / "backend").write_text(backend)
-            except OSError:
-                pass
-            return code
-        if i + 1 < len(order):
-            cleanup_strays(read_state().get("before"), det.get("session") == "game")
-            log(code, "%s via %s failed, trying %s" % (kind, backend, order[i + 1]))
-    return code
+    desktopguard.begin()                    # the real desktop's settings, before the nested one can touch them
+    try:
+        for i, backend in enumerate(order):
+            code = _launch_once(kind, det, cfg, backend, first=(i == 0))
+            if code == "A0OK":
+                try:
+                    (state_dir() / "backend").write_text(backend)
+                except OSError:
+                    pass
+                return code
+            if i + 1 < len(order):
+                cleanup_strays(read_state().get("before"), det.get("session") == "game")
+                log(code, "%s via %s failed, trying %s" % (kind, backend, order[i + 1]))
+        return code
+    finally:                                # also on Steam's Exit game (SystemExit from the signal handler)
+        desktopguard.end()
 
 
 def _drawing(out: Path) -> str:
@@ -676,8 +689,11 @@ def _launch_once(kind: str, det: dict, cfg, backend: str, first: bool = True) ->
 
     bridge = None
     touch = None
+    gestures = None
 
     def _bail(signum, _frame):              # Steam's "Exit game" sends SIGTERM to us
+        if gestures:
+            gestures.stop()
         if bridge:
             bridge.stop()
         if touch:
@@ -717,13 +733,24 @@ def _launch_once(kind: str, det: dict, cfg, backend: str, first: bool = True) ->
         if touch_on:
             t = str(cfg.get("touch", "steam"))
             try:
-                touch = touchmode.Session(det["display"], int(t) if t.isdigit() else None, log=lambda m: log("A0OK", m))
+                touch = touchmode.Session(
+                    det["display"], int(t) if t.isdigit() else None, log=lambda m: log("A0OK", m),
+                    locked=str(cfg.get("touch_lock", "on")).lower() != "off",
+                    on_focus=lambda front: bridge.set_paused(not front) if bridge else None)
                 touch_note = "button on (%s)" % touchmode.label(touch.refresh(force=True) if touch.ok else None) if touch.ok \
                     else "gamescope's display not reachable"
                 if not touch.ok:
                     touch = None
             except Exception as e:                  # a bonus too: never stop the desktop opening
                 touch, touch_note = None, "error: %s" % e
+        gesture_q: List[str] = []
+        if touch and str(cfg.get("gestures", "on")).lower() != "off":
+            try:
+                gestures = touchgesture.Watcher(gesture_q.append).start()
+                time.sleep(0.2)
+                touch_note += "; " + (gestures.note or "gestures starting")
+            except Exception as e:  # noqa: BLE001
+                gestures, touch_note = None, touch_note + "; gestures off (%s)" % e
         write_state(kind, "open", pid=proc.pid, backend=backend, size="%dx%d" % (w, h), pad=pad_note, touch=touch_note,
                     before=read_state().get("before"))
         run_hooks("portal")
@@ -731,10 +758,17 @@ def _launch_once(kind: str, det: dict, cfg, backend: str, first: bool = True) ->
                "Back to game: Steam button > Exit game, or open Back to Game in the menu.")
         while proc.poll() is None:              # 5 checks a second for the touch button; cheap
             if touch:
+                while gesture_q:
+                    picked = touch.gesture(gesture_q.pop(0))
+                    if picked is not None:
+                        _save_touch(picked)
                 picked = touch.poll()
                 if picked is not None:
                     _save_touch(picked)
             time.sleep(0.2)
+        if gestures:
+            gestures.stop()
+            gestures = None
         if touch:
             touch.end()
             touch = None
@@ -750,6 +784,8 @@ def _launch_once(kind: str, det: dict, cfg, backend: str, first: bool = True) ->
         run_hooks("game")
         return "A0OK"
     finally:
+        if gestures:
+            gestures.stop()
         if touch:
             touch.end()
         if bridge:
@@ -768,7 +804,8 @@ def _save_touch(value: int) -> None:
 
 def set_options(resolution: Optional[str] = None, backend: Optional[str] = None,
                 pad: Optional[str] = None, pad_speed: Optional[str] = None,
-                touch_button: Optional[str] = None, touch: Optional[str] = None) -> dict:
+                touch_button: Optional[str] = None, touch: Optional[str] = None,
+                touch_lock: Optional[str] = None, gestures: Optional[str] = None) -> dict:
     """Saves the Airlock tab's choices into portal.ini (other settings in it are kept)."""
     cp = configparser.ConfigParser(interpolation=None)
     try:
@@ -800,6 +837,11 @@ def set_options(resolution: Optional[str] = None, backend: Optional[str] = None,
         if touch_button not in ("on", "off"):
             return {"error": "touch button must be on or off"}
         cp["portal"]["touch_button"] = touch_button
+    for key, val in (("touch_lock", touch_lock), ("gestures", gestures)):
+        if val is not None:
+            if val not in ("on", "off"):
+                return {"error": "%s must be on or off" % key}
+            cp["portal"][key] = val
     if touch is not None:
         if touch != "steam" and not (touch.isdigit() and int(touch) in touchmode.MODES):
             return {"error": "touch must be steam or a mode number"}
@@ -809,7 +851,8 @@ def set_options(resolution: Optional[str] = None, backend: Optional[str] = None,
         cp.write(fh)
     c = load_config()
     return {"resolution": c.get("resolution"), "backend": c.get("backend"), "pad": c.get("pad"),
-            "pad_speed": c.get("pad_speed"), "touch_button": c.get("touch_button"), "touch": c.get("touch")}
+            "pad_speed": c.get("pad_speed"), "touch_button": c.get("touch_button"), "touch": c.get("touch"),
+            "touch_lock": c.get("touch_lock"), "gestures": c.get("gestures")}
 
 
 def switch_session(det: dict, target: str) -> str:
@@ -823,10 +866,111 @@ def switch_session(det: dict, target: str) -> str:
     return "A0OK"
 
 
+# ------------------------------------------------------------------ opt-in: two sanity checks before Airlock
+RISK = ("WARNING: AIRLOCK MAY BLOCK DESKTOP MODE. On 2026-11-15 a ROG Ally on Bazzite stopped entering Desktop Mode "
+        "(Switch to Desktop went straight back to Game Mode) while Airlock was installed. Airlock runs a second Plasma "
+        "desktop with your real settings, so it is a suspect. Since 0.6.10 it backs up and puts back those settings "
+        "around every use, but that is NOT yet proven on real hardware. Enable it only if you can get back in by "
+        "another route.")
+CHECK1 = ("Sanity check 1 of 2: Desktop Mode works right now. Did Desktop Mode start normally this time, with no "
+          "bounce back to Game Mode? (Enabling Airlock while the desktop already misbehaves would make any later "
+          "problem impossible to pin down.)")
+CHECK2 = ("Sanity check 2 of 2: you have a way back. If Desktop Mode ever returns straight to Game Mode: "
+          "(a) Deck Deck Goose tile > Airlock tab > Repair Desktop Mode, then Disable Airlock (both work from Game Mode); "
+          "(b) Can't Bear It - Rescue from a USB stick, option 1, in Konsole; "
+          "(c) a USB keyboard, Ctrl+Alt+F3, log in, run the rescue there. "
+          "Type AIRLOCK to confirm you have one of these.")
+TYPED = "AIRLOCK"
+
+
+def enabled() -> bool:
+    return str(load_config().get("enabled", "no")).lower() == "yes"
+
+
+def checks_passed(desktop_ok, typed, det_session: Optional[str] = None) -> Optional[str]:
+    """None when both sanity checks were answered, else what is missing."""
+    session = det_session or detect_session()
+    if session == "game":
+        return "Enable Airlock from Desktop Mode: sanity check 1 needs a Desktop Mode that just started normally."
+    if desktop_ok is not True:
+        return "Sanity check 1 not confirmed: enable Airlock only when Desktop Mode started normally."
+    if str(typed or "").strip().upper() != TYPED:
+        return "Sanity check 2 not confirmed: type %s once you have a way back." % TYPED
+    return None
+
+
+def ask_checks(inp=input, out=print) -> Optional[str]:
+    """The two questions in a terminal (ddg airlock enable)."""
+    out("")
+    out(RISK)
+    out("")
+    out(CHECK1)
+    a1 = inp("Did Desktop Mode start normally? Type y and press Enter: ").strip().lower()
+    out("")
+    out(CHECK2)
+    a2 = inp("Type %s: " % TYPED)
+    return checks_passed(a1 in ("y", "yes"), a2)
+
+
+def _set_enabled(on: bool) -> None:
+    cp = configparser.ConfigParser(interpolation=None)
+    try:
+        cp.read(conf_path())
+    except configparser.Error:
+        pass
+    if "portal" not in cp:
+        cp["portal"] = {}
+    cp["portal"]["enabled"] = "yes" if on else "no"
+    if on:
+        cp["portal"]["enabled_version"] = __version__
+        cp["portal"]["enabled_time"] = time.strftime("%Y-%m-%d %H:%M")
+    conf_path().parent.mkdir(parents=True, exist_ok=True)
+    with open(conf_path(), "w") as f:
+        cp.write(f)
+
+
+def enable(desktop_ok, typed, add_tile: bool = True) -> List[Step]:
+    why = checks_passed(desktop_ok, typed)
+    if why:
+        return [Step("Enable Airlock", False, why)]
+    _set_enabled(True)
+    log("A0OK", "Airlock enabled after the two sanity checks")
+    steps = [Step("Enable Airlock", True, "both sanity checks confirmed")]
+    if add_tile:
+        steps += gamemode.install(("airlock",))
+    return steps
+
+
+def disable(remove_tile: bool = True) -> List[Step]:
+    """Switch Airlock off: it will not open, and its Game Mode tile goes (works from Game Mode too)."""
+    st = read_state()
+    if st.get("status") == "open" and _pid_alive(st.get("pid")):
+        stop()
+    _set_enabled(False)
+    from . import desktopguard
+    steps = [Step("Disable Airlock", True, "Airlock will not open until it is enabled again")]
+    fixed = desktopguard.repair().get("done") or []
+    if fixed:
+        steps.append(Step("Repair Desktop Mode", True, "; ".join(fixed)))
+    if remove_tile and not gamemode.in_game_mode():
+        steps += gamemode.remove(("airlock",))
+    elif remove_tile:
+        steps.append(Step("Airlock tile", True, "kept for now (Steam must close to remove it): it refuses to open; "
+                                                 "remove it later from Desktop Mode"))
+    return steps
+
+
 def start(force: bool = False, det: Optional[dict] = None) -> dict:
     """What the Airlock tile runs. force=True also allows it from Desktop Mode (to try it out)."""
     cfg = load_config()
     det = det or detect()
+    if not enabled():
+        log("AENA")
+        msg = ("Airlock is not enabled.\n\nIt may block Desktop Mode (seen once on a ROG Ally), so it is opt-in. "
+               "In Desktop Mode open Deck Deck Goose > Airlock tab > Enable Airlock and answer the two sanity checks.")
+        if det.get("session") == "game":
+            tell(det, msg)
+        return {"code": "AENA", "message": msg.replace("\n\n", " ")}
     if det["session"] != "game" and not force:
         log("A8NG", det["session"])
         where = "already on the desktop" if det["session"] == "desktop" else "in a mode it couldn't recognise"
@@ -855,6 +999,7 @@ def start(force: bool = False, det: Optional[dict] = None) -> dict:
                 elif mode == "switch":
                     if ask_yes_no(det, "The nested desktop couldn't open.\n\nSwitch to full Desktop Mode instead?\n"
                                        "Your game WILL close."):
+                        desktopguard.repair()        # nothing of Airlock's may go along into Desktop Mode
                         return {"code": switch_session(det, "plasma"), "mode": "switch", "tried": tried,
                                 "notes": notes}
                     log("ABNO")
@@ -896,11 +1041,13 @@ def status() -> dict:
     key = "portal" if open_now else session if session in INDICATORS else "unknown"
     cfg = load_config()
     return {"version": __version__, "build": __build_date__, "session": session, "portal_open": open_now,
+            "enabled": enabled(), "risk": RISK, "check1": CHECK1, "check2": CHECK2, "typed": TYPED,
             "last": st, "indicator": INDICATORS[key],
             "options": {"resolution": cfg.get("resolution", "auto"), "backend": cfg.get("backend", "auto"),
                         "size": "%dx%d" % screen_size(cfg), "panel": "%dx%d" % panel_size(),
                         "pad": cfg.get("pad", "on"), "pad_speed": cfg.get("pad_speed", "normal"),
-                        "touch_button": cfg.get("touch_button", "on"), "touch": cfg.get("touch", "steam")},
+                        "touch_button": cfg.get("touch_button", "on"), "touch": cfg.get("touch", "steam"),
+                        "touch_lock": cfg.get("touch_lock", "on"), "gestures": cfg.get("gestures", "on")},
             "touch_label": touchmode.label(int(cfg["touch"])) if str(cfg.get("touch", "")).isdigit() else "Steam's choice",
             "pad": padbridge.check()}
 

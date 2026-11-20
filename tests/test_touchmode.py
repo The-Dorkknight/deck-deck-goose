@@ -92,12 +92,12 @@ class RootProperty(Base):
 class SessionLife(Base):
     def test_restores_steams_value(self):
         self.steam_sets(4)
-        s = touchmode.Session(self.outer)
+        s = touchmode.Session(self.outer, locked=False)
         self.assertTrue(s.ok)
         touchmode._write(touchmode.request_file(), "1")
         self.assertEqual(s.poll(), 1)
         self.assertEqual(self.value(), 1)
-        self.assertEqual(touchmode.current_file().read_text(), "1")
+        self.assertEqual(touchmode.parse_current(touchmode.current_file().read_text())["mode"], 1)
         s.end()
         self.assertEqual(self.value(), 4)                     # Game Mode gets Steam's own mode back
         self.assertFalse(touchmode.restore_file().exists())
@@ -128,7 +128,7 @@ class SessionLife(Base):
         s.end()
 
     def test_bad_requests_are_ignored(self):
-        s = touchmode.Session(self.outer)
+        s = touchmode.Session(self.outer, locked=False)
         for bad in ("", "x", "99", "-1", "1; rm -rf /"):
             touchmode._write(touchmode.request_file(), bad)
             self.assertIsNone(s.poll())
@@ -146,7 +146,7 @@ class ButtonWindow(Base):
 
     def test_tap_cycles_and_shows_popup(self):
         self.steam_sets(4)
-        s = touchmode.Session(self.outer)
+        s = touchmode.Session(self.outer, locked=False)
         stop = threading.Event()
 
         def supervisor():
@@ -242,6 +242,8 @@ class LaunchIntegration(Base):
         cfg = airlock.load_config()
         cfg["pad"] = "off"
         cfg["touch"] = "1"                                    # last picked: Mouse
+        cfg["touch_lock"] = "off"                             # this test picks with the button
+        cfg["gestures"] = "off"
 
         def pick_trackpad():
             time.sleep(0.8)

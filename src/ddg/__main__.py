@@ -61,10 +61,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     gmp = sub.add_parser("gamemode", help="add or remove the Deck Deck Goose and Airlock tiles in Steam's Game Mode")
     gmp.add_argument("action", choices=["add", "remove", "status"])
     al = sub.add_parser("airlock", help="open a desktop in a window inside Game Mode (game keeps running)")
-    al.add_argument("action", choices=["start", "stop", "status", "plan", "probe", "sleep-hook", "back-entry", "cleanup", "pad"])
+    al.add_argument("action", choices=["start", "stop", "status", "plan", "probe", "sleep-hook", "back-entry", "cleanup", "pad", "repair", "enable", "disable"])
     al.add_argument("value", nargs="?", default="", help="sleep-hook: on|off; probe: --live; pad: --watch")
     al.add_argument("--force", action="store_true", help="start: allow it from Desktop Mode (to try it out)")
     al.add_argument("--live", action="store_true", help="probe: also open a 10-second test window")
+    al.add_argument("--checked", action="store_true",
+                    help="enable: skip the two questions (you confirm Desktop Mode works and you have a way back)")
     kb = sub.add_parser("osk", help="KDE on-screen keyboard for Desktop Mode")
     kb.add_argument("action", choices=["on", "off", "status", "install"])
     sp = sub.add_parser("sound", help="fix quiet speakers (ROG Ally on Bazzite) and boost the volume")
@@ -136,6 +138,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         if a.action in ("stop", "status", "plan", "cleanup"):
             print(_json.dumps(getattr(airlock, a.action)(), indent=1))
             return 0
+        if a.action == "enable":
+            if a.checked:
+                return _print_steps(airlock.enable(True, airlock.TYPED))
+            if not sys.stdin.isatty():
+                print("The two sanity checks need a terminal (or add --checked).")
+                return 2
+            try:
+                why = airlock.ask_checks()
+            except (EOFError, KeyboardInterrupt):
+                why = "Cancelled."
+            if why:
+                print("\nAirlock not enabled. " + why)
+                return 2
+            return _print_steps(airlock.enable(True, airlock.TYPED))
+        if a.action == "disable":
+            return _print_steps(airlock.disable())
+        if a.action == "repair":
+            from . import desktopguard
+            r = desktopguard.repair()
+            print(r["message"])
+            return 0 if r["ok"] else 1
         if a.action == "probe":
             ok, text = airlock.probe(live=a.live or a.value == "--live")
             print(text)

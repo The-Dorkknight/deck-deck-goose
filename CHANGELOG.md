@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.6.12-wip - 2026-11-18
+Reports from the Ally: (1) Airlock escaped its window: in Steam's menu the thumbstick moved a mouse pointer; (2) closing Airlock as a game was hard, "the two Airlocks crash"; (3) after about 3 minutes Airlock started well but got muddled; (4) asked for a locked touch mode with gestures.
+- **(1) Pad mouse paused while Steam is in front** (`touchmode.Session` reads gamescope's `GAMESCOPE_FOCUSED_APP`; Steam's own UI is 769): the pad bridge lets go of held buttons and drops input until Airlock is in front again (`padbridge.Bridge.set_paused`). Steam also gets its own touch mode back while its menu is up. Another game brought to the front counts as away too.
+- **(2) Partly:** Airlock no longer sends a desktop notification in Game Mode; that could start a notification service drawing its own window on gamescope's display, which Steam would count as a second Airlock window. If you still see two Airlocks, a photo of Steam's window list (Quick Access > the windows icon) would pin it down.
+- **(3) The touch mode is kept:** while Airlock is in front and a mode is chosen, a reset by Steam is put back within 0.2 s and logged (count in the log), which is the most likely cause of the muddle. Not confirmed on the Ally.
+- **(4) Touch lock and gestures** (new `src/ddg/touchgesture.py`): locked at start (amber frame on the button); **four fingers down** unlocks / locks; **three-finger double tap** cycles the mode while unlocked; the button says *Locked* when locked. Gestures are read from the touchscreen read-only, only while Airlock is in front; popups come from the button. Airlock tab: **Touch lock**, **Gestures**.
+- Tests: 318, including the gesture recogniser with recorded finger tracks (swipes, taps, fingers landing one by one, near misses), a pipe-fed touchscreen reader, focus hand-back and put-back on a real X server, the lock, the locked button clicked with XTest, and the pad pause. Not run on the Ally.
+
+## 0.6.11-wip - 2026-11-15
+- **Airlock is opt-in, behind two sanity checks, with warnings everywhere.** Airlock may block Desktop Mode (seen once on the Ally; not proven either way), so:
+  - installing Deck Deck Goose (installer, Install button, Add to Game Mode) adds **only the Deck Deck Goose tile**;
+  - **Enable Airlock** (Airlock tab, or `ddg airlock enable`) asks two sanity checks: (1) Desktop Mode started normally just now (refused in Game Mode); (2) you have a way back, confirmed by typing `AIRLOCK`. The window, the server and the command line all check both. Then it adds the Airlock tile;
+  - until then Airlock refuses to open, from the tab and from an existing Airlock tile (a message explains how to enable it); new log code `AENA`;
+  - **Disable Airlock** closes it, runs Repair Desktop Mode and removes its tile (from Game Mode the tile stays but refuses to open).
+- Warnings: README (top and Airlock section), installer output, Install button, Airlock tab (red card), project page, release notes and PDF. The README's earlier "DONT INSTALL YET" note is replaced by this fuller warning.
+- **Upgrading from an earlier version:** your Airlock tile stays but will not open until you enable Airlock in Desktop Mode.
+- Tests: 302, including the opt-in in a real browser (wrong word refused, right word enables and adds the tile). Not run on the Ally.
+
+## 0.6.10-wip - 2026-11-15
+- **Safeguard against being locked out of Desktop Mode.** Report from the Ally: *Switch to Desktop* returned straight to Game Mode; updating Deck Deck Goose fixed it (diagnosed with *Can't Bear It - Rescue*; the exact cause was not pinned down). Airlock's nested Plasma runs with your real settings and per-user services, so it could leave behind what makes Desktop Mode fail to start.
+- **Desktop guard** (new `src/ddg/desktopguard.py`): before every Airlock, the Plasma/KWin files it could change (display layout, panel layout, saved session, kscreen) and the user session's environment (`systemctl --user show-environment`) are backed up; when Airlock closes (normally, Back to Game, Steam's *Exit game* signal, or an error) they are put back exactly, and files it created are removed. A hard kill is repaired at the next Airlock or Deck Deck Goose start. The backup is only used when complete.
+- **Before the last-resort switch to Desktop Mode** Airlock now cleans everything first.
+- **Repair Desktop Mode** button (Airlock tab) and `ddg airlock repair`: stale Airlock state, lock and ready files, leftover programs and services, settings, environment, Steam's touch mode. Refuses while an Airlock is open.
+- New log code `ADGR`.
+- Tests: 293, including a whole Airlock run with a stand-in KWin that changes the settings and environment, closed normally and with Steam's *Exit game* signal mid-run, crash repair, a running Airlock left alone, and the Repair button over the web page and the command line. Not run on the Ally.
+
+## 0.6.9-wip - 2026-11-15
+- **Report from the Ally: taps now press buttons (0.6.8 worked), but drop-down lists got stuck and could not be clicked.** Firefox draws a drop-down's list as a separate pop-up window; under gamescope that window can be unreachable by taps.
+- **Fixed:** in Game Mode (or on a touch screen) a drop-down opens an in-page picker instead: its choices as big buttons, the current one marked, plus Cancel. Picking one sets the drop-down and fires its change, exactly as the normal list would. Desktop Mode keeps the normal list.
+- Also confirmed on the Ally: after updating, Desktop Mode works again (the earlier problem was not Deck Deck Goose).
+- Tests: 282, including browser tests with emulated mouse and with real touch (pick, Cancel, disabled choices left out, Desktop Mode unchanged). Not run on the Ally.
+
+## 0.6.8-wip - 2026-11-15
+- **Report from the Ally: in Game Mode, tapping a game or a menu selected its text instead of pressing the button.** Firefox on gamescope's X display gets a finger as a mouse unless it is started with real touch; the tiny slide between press and release became a text selection, so no click was sent.
+- **Fixed in three places:** the Game Mode launcher starts Firefox with `MOZ_USE_XINPUT2=1` and the tile profile enables touch events; the page no longer selects text except in logs, code and input boxes; and a press and release on the same button, close together and quick, counts as a press when the browser sent no click (never twice).
+- **Launchers now update themselves:** existing Game Mode launchers are rewritten on the next Deck Deck Goose start when this version writes them differently (atomic replace, so a running one is not disturbed). Before, fixes in them only arrived after pressing Add to Game Mode again.
+- Tests: 279, including a browser test for wobbly taps, normal clicks (once), long drags (no press) and disabled buttons. Not run on the Ally.
+
 ## 0.6.7-wip - 2026-11-14
 - **Report from the Ally: mouse weirdness in Airlock** (a tap clicks, holding does nothing, dragging a folder brings up a menu). Gamescope decides what a finger does from `STEAM_TOUCH_CLICK_MODE`, which Steam sets; Airlock did not control it.
 - **Touch-mode button** (new `src/ddg/touchmode.py`, `src/ddg/touchbutton.py`): a small square in the Airlock desktop's top-left corner cycles **Mouse** (tap clicks, drag works) / **Native touch** / **Trackpad** / **Right-click**, with a popup naming the mode. Drawn with libX11 through ctypes and its own pixel font: no new packages.

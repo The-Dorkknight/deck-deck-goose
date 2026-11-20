@@ -1,6 +1,11 @@
-# Deck Deck Goose 0.6.7-wip
-# WARNING DONT INSTALL YET!!!!!!!!!!!!!
-POSSIBLY HAS A BUG WHICH DISABLES BAZZITE DESKTOP MODE, THO I SUSPECT IT IS MORE LIKELEY ANOTHER APP IM WORKING ON( BAZZITE DEEP SLEEP) CAUSING THE ISSUE
+# Deck Deck Goose 0.6.12-wip
+> [!CAUTION]
+> **AIRLOCK MAY BLOCK DESKTOP MODE.** On 2026-11-15 a ROG Ally on Bazzite stopped entering Desktop Mode (*Switch to Desktop* went straight back to Game Mode) while Airlock was installed. It came back after updating Deck Deck Goose, and the exact cause was never pinned down (another app being tested at the same time, Bear With Me, is also a suspect). Airlock runs a second Plasma desktop with your real settings, so it is treated as guilty until proven innocent:
+> - **Airlock is now OFF by default.** Installing Deck Deck Goose does **not** add the Airlock tile.
+> - Turning it on (**Airlock tab > Enable Airlock**, or `ddg airlock enable`) asks **two sanity checks**: (1) Desktop Mode started normally just now; (2) you have a way back, and you type `AIRLOCK` to confirm.
+> - Since 0.6.10 Airlock backs up and puts back the desktop settings it could change, every time. **This is not yet proven on real hardware.**
+> - **Your way back** if Desktop Mode ever bounces: Deck Deck Goose tile > Airlock tab > **Repair Desktop Mode**, then **Disable Airlock** (both work from Game Mode); or *Can't Bear It - Rescue* from a USB stick (option 1); or a USB keyboard, Ctrl+Alt+F3, log in and run the rescue there.
+> - Everything else in Deck Deck Goose (This PC folder, Games tab, Sound, Wake) does not depend on Airlock.
 
 ![Deck Deck Goose: a cyborg goose riding a flying Steam Deck over a neon city](docs/images/deck-deck-goose.webp)
 
@@ -23,7 +28,7 @@ Formerly *This PC for Linux*. Made for Bazzite and Nobara (and should work on Li
 
 ## Install: double-click
 
-**Quickest (Bazzite / Nobara / Mint, in Desktop Mode):** double-click **`DeckDeckGoose-Install-Linux.sh`** and choose **Run in Terminal**. In one step it copies the program to `~/.local/share/deck-deck-goose`, puts **Deck Deck Goose** in the app menu and adds the **Deck Deck Goose** and **Airlock** tiles to Steam's Game Mode (Steam closes for a moment). No password. Afterwards you can delete the download folder. The window also offers the same **Install** button at the top until it is installed, and **Update** when you run a newer download.
+**Quickest (Bazzite / Nobara / Mint, in Desktop Mode):** double-click **`DeckDeckGoose-Install-Linux.sh`** and choose **Run in Terminal**. In one step it copies the program to `~/.local/share/deck-deck-goose`, puts **Deck Deck Goose** in the app menu and adds the **Deck Deck Goose** tile to Steam's Game Mode (the **Airlock** tile only after you enable Airlock, see the warning above) (Steam closes for a moment). No password. Afterwards you can delete the download folder. The window also offers the same **Install** button at the top until it is installed, and **Update** when you run a newer download.
 
 Or just try it without installing:
 
@@ -63,6 +68,9 @@ Only the Games tab, from the same engine as the sibling GameShelf project. Diffe
 **Remove them** with **Remove tiles** (Games tab), or `python3 -m ddg gamemode remove`.
 
 ## Airlock: a desktop inside Game Mode
+
+> [!WARNING]
+> **Airlock may block Desktop Mode** (see the warning at the top). It is off until you enable it in the Airlock tab, after two sanity checks. Know your way back first: **Repair Desktop Mode**, **Disable Airlock**, or *Can't Bear It - Rescue*.
 
 ![The Airlock tab: what it does, Open Airlock, Back to Game, the fallback order](docs/images/gui-airlock.webp)
 
@@ -106,7 +114,22 @@ Tap the **Airlock** tile in Game Mode. It starts a second, nested KWin composito
 
 ![The touch-mode button and its popup for each mode (simulated screens)](docs/images/airlock-touch-button.webp)
 
+**Touch lock and gestures (0.6.12):** the mode is **locked** when Airlock opens (thick amber frame on the button), so nothing changes it by accident, and Airlock **puts it back whenever Steam resets it** while Airlock is in front (that reset is what made Airlock "muddled" after a few minutes; each time is logged).
+- **Four fingers dragged down**: unlock, and again to lock.
+- **Three-finger double tap** (while unlocked): next mode. Tapping the button while locked just says *Locked*.
+- The gestures are read straight from the touchscreen, read-only (nothing is grabbed), and only while Airlock is in front. Airlock tab: **Touch lock** (locked or unlocked at start) and **Gestures** (on/off).
+
+**Airlock stays in its window (0.6.12):** when Steam's own menu, Quick Access or overlay comes to the front (gamescope's `GAMESCOPE_FOCUSED_APP` changes), Airlock **pauses the pad mouse** (held buttons let go at once) and gives Steam its own touch mode back; both come back when Airlock is in front again. Airlock no longer sends desktop notifications in Game Mode (they could start a notification window outside Airlock).
+
 It changes gamescope's touch setting (`STEAM_TOUCH_CLICK_MODE`, which Steam normally sets) and **never follows you out**: Airlock saves Steam's own value when it opens and puts it back when it closes, however it closes. If Airlock is killed too hard to do that, the next Airlock or Deck Deck Goose start puts it back. The button only exists inside Airlock (never in the real Desktop Mode or Game Mode), and only in Game Mode. Airlock remembers the last mode you picked for the next Airlock. Steam can change the setting itself, for example while its menu is open; the button shows the real mode within a couple of seconds, so tap it again if needed. Switch it off in the Airlock tab (**Touch button**). In Dolphin, dropping a folder on another asks *Move Here / Copy Here / Link Here*: that menu is normal. **Not yet run on the Ally.**
+
+**Never locked out of Desktop Mode (0.6.10):** on 2026-11-15 the Ally's *Switch to Desktop* went straight back to Game Mode; updating Deck Deck Goose cleared it, but the exact cause was not pinned down. Airlock's nested Plasma runs as you, with your real settings and per-user services, so anything it changed could follow you into the real Desktop Mode. Now, around every Airlock:
+- the files it could change (`kwinoutputconfig.json`, `kwinrc`, `plasmashellrc`, the desktop/panel layout, `ksmserverrc`, saved sessions, `kscreen`) and the user session's environment are **backed up before it opens and put back when it closes**: normal close, Back to Game, Steam's *Exit game*, or an error;
+- if Airlock dies too hard to do that, the next Airlock or Deck Deck Goose start does it;
+- before Airlock's last-resort switch to Desktop Mode, everything is cleaned first;
+- the Airlock tab has **Repair Desktop Mode** (`ddg airlock repair`): resets a stale Airlock state, lock and ready files, closes leftover programs and services, puts settings and environment back, restores Steam's touch mode. If Desktop Mode still bounces after that, run *Can't Bear It - Rescue* (option 1) for the full report.
+
+Changes you make to Plasma's look *inside* Airlock are therefore not kept: its desktop is a temporary view.
 
 **If it can't open, it tries these in order** (and tells you which): 1. full Plasma desktop in the window; 2. *lite* (just Dolphin and Konsole, for less memory); 3. a real switch to Desktop Mode via `steamos-session-select` (**closes your game, so it always asks first; no answer counts as No**); 4. instructions for switching by hand. It **never reboots or logs you out by itself**.
 
@@ -161,6 +184,8 @@ Split window: Dolphin and Nemo split with **F3**; Double Commander and Krusader 
 **Flatpak access.** Flatpak's own documentation says `--filesystem=host` still hides `/var`, `/run` and other system folders, except `/run/media`. So each ticked app gets `flatpak override --user --filesystem=host --filesystem=home --filesystem=/run/media` (plus `/var/mnt` if it exists). That weakens its sandbox, so only tick file managers you use.
 
 ## Games tab (Steam)
+
+**Touch in Game Mode (0.6.8):** taps used to select text instead of pressing buttons. The Game Mode tile now starts Firefox with real touch (`MOZ_USE_XINPUT2=1`, `dom.w3c_touch_events.enabled`), the page no longer selects text outside logs and boxes, and a tap that wobbles a little still counts as a press. Older tiles are updated automatically the next time Deck Deck Goose starts (no need to press Add to Game Mode again). **Drop-down lists (0.6.9):** in Game Mode a tap on a drop-down opens its choices inside the page as big buttons (with Cancel), because Firefox's own pop-up list could open where taps did not reach it. Desktop Mode keeps the normal list.
 
 The buttons are on each game's card; tapping the card itself does nothing. When a button is greyed out, the card now says why in plain text underneath (for example *Move: close Steam first*, *Compress: needs a btrfs drive*, *Installed twice*), because a touchscreen never shows hover tips.
 

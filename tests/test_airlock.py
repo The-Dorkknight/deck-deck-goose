@@ -115,7 +115,7 @@ class Pure(unittest.TestCase):
             self.assertEqual(airlock._drawing(f), "software")
 
     def test_errcodes_documented(self):
-        self.assertEqual(len(airlock.ERRCODES), 15)
+        self.assertEqual(len(airlock.ERRCODES), 17)
         self.assertTrue(all(len(k) == 4 for k in airlock.ERRCODES))
 
     def test_data_files_ship(self):
@@ -141,7 +141,8 @@ class Ladder(SteamBase):
         os.environ["PATH"] = str(self.t) + os.pathsep + self.old_path
         core.config_dir().mkdir(parents=True, exist_ok=True)
         airlock.conf_path().write_text("[portal]\nlite_apps = fakeapp\nwatchdog_seconds = 4\n"
-                                       "allow_session_switch = no\nmin_ram_full_mb = 999999\n")
+                                       "allow_session_switch = no\nmin_ram_full_mb = 999999\n"
+                                       "enabled = yes\n")         # Airlock is opt-in since 0.6.11
         self.det = dict(FULL, kwin=self.kwin, plasmashell=None, session_select=None)
         # hook that records every mode it is called with
         hd = core.config_dir() / "hooks" / "mode-change.d"
@@ -239,7 +240,8 @@ class Ladder(SteamBase):
     def test_options_saved(self):
         self.assertEqual(airlock.set_options(resolution="native", backend="x11"), {"resolution": "native", "backend": "x11",
                                                                                 "pad": "on", "pad_speed": "normal",
-                                                                            "touch_button": "on", "touch": "steam"})
+                                                                            "touch_button": "on", "touch": "steam",
+                                                                            "touch_lock": "on", "gestures": "on"})
         self.assertEqual(airlock.set_options(touch_button="off")["touch_button"], "off")
         self.assertIn("error", airlock.set_options(touch_button="maybe"))
         self.assertIn("error", airlock.set_options(touch="99"))

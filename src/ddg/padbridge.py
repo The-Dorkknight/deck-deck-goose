@@ -324,11 +324,24 @@ class Bridge:
         self.names: List[str] = []
         self._paths: Dict[int, str] = {}        # fd -> /dev/input/eventN, so a pad isn't opened twice
         self.events = 0
+        self.paused = False             # True while Steam's own menu is in front: the pad belongs to Steam then
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
     def _emit(self, etype, code, value):
         self.sink.emit(etype, code, value)
+
+    def set_paused(self, paused: bool) -> None:
+        """Pause (Steam's menu in front) or resume. Pausing lets go of every held button first."""
+        if paused and not self.paused:
+            self.paused = True
+            self.tr.release_all()
+            try:
+                self.sink.sync()
+            except Exception:  # noqa: BLE001
+                pass
+        elif not paused:
+            self.paused = False
 
     def add_fd(self, fd: int, name: str, ranges: Optional[dict] = None) -> None:
         self.fds[fd] = (name, ranges or {})
@@ -377,13 +390,16 @@ class Bridge:
                 if not data:
                     self._drop(fd)
                     continue
+                if self.paused:                     # read and drop: nothing reaches the virtual mouse
+                    continue
                 ranges = self.fds[fd][1]
                 for _s, _u, etype, code, value in struct.iter_unpack(EVENT_FMT, data[:len(data) - len(data) % EVENT_SIZE]):
                     self.tr.feed(etype, code, value, ranges.get(code))
                     n += 1
         else:
             time.sleep(min(timeout, 0.5))
-        self.tr.tick()
+        if not self.paused:
+            self.tr.tick()
         self.sink.sync()
         self.events += n
         return n

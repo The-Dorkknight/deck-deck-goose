@@ -4,6 +4,69 @@ Every build of this project, newest first, with the main code changes in each. R
 only the last three builds in git history, so older builds live on here (and in CHANGELOG.md).
 Written by `tools/history_log.py`; entries are never removed.
 
+## 0.6.12-wip: Airlock stays in its window; touch lock with gestures (2026-11-18)
+
+- 15 files changed, 817 insertions(+), 47 deletions(-)
+- Main code changes:
+  - `tests/test_airlock_focus.py` +343 -0
+  - `src/ddg/touchgesture.py` +208 -0
+  - `src/ddg/touchmode.py` +144 -21
+  - `src/ddg/airlock.py` +42 -5
+  - `src/ddg/touchbutton.py` +29 -9
+  - `src/ddg/padbridge.py` +17 -1
+  - `tests/test_touchmode.py` +6 -4
+  - `src/ddg/webui.py` +7 -2
+  - `tests/test_airlock.py` +2 -1
+  - `src/ddg/__init__.py` +1 -1
+  - ... and 1 more code files
+
+## 0.6.11-wip: Airlock is opt-in behind two sanity checks; warnings everywhere (2026-11-15)
+
+- 15 files changed, 352 insertions(+), 19 deletions(-)
+- Main code changes:
+  - `tests/test_airlock_optin.py` +152 -0
+  - `src/ddg/airlock.py` +104 -0
+  - `src/ddg/webui.py` +29 -5
+  - `src/ddg/__main__.py` +19 -1
+  - `src/ddg/gamemode.py` +9 -1
+  - `DeckDeckGoose-Install-Linux.sh` +7 -2
+  - `tests/test_airlock.py` +3 -2
+  - `tests/test_gamemode.py` +2 -0
+  - `src/ddg/__init__.py` +1 -1
+  - `setup.py` +1 -1
+
+## 0.6.10-wip: desktop guard (never locked out of Desktop Mode) and Repair Desktop Mode (2026-11-15)
+
+- 12 files changed, 545 insertions(+), 20 deletions(-)
+- Main code changes:
+  - `src/ddg/desktopguard.py` +267 -0
+  - `tests/test_desktopguard.py` +221 -0
+  - `src/ddg/airlock.py` +19 -13
+  - `src/ddg/webui.py` +11 -1
+  - `src/ddg/__main__.py` +6 -1
+  - `tests/test_airlock.py` +1 -1
+  - `src/ddg/__init__.py` +1 -1
+  - `setup.py` +1 -1
+
+## 0.6.9-wip: drop-down lists open an in-page picker in Game Mode (2026-11-15)
+
+- 8 files changed, 108 insertions(+), 6 deletions(-)
+- Main code changes:
+  - `tests/test_touch_taps.py` +76 -0
+  - `src/ddg/webui.py` +21 -1
+  - `src/ddg/__init__.py` +1 -1
+  - `setup.py` +1 -1
+
+## 0.6.8-wip: Game Mode taps press buttons instead of selecting text (2026-11-15)
+
+- 9 files changed, 165 insertions(+), 7 deletions(-)
+- Main code changes:
+  - `tests/test_touch_taps.py` +97 -0
+  - `src/ddg/gamemode.py` +35 -2
+  - `src/ddg/webui.py` +19 -1
+  - `src/ddg/__init__.py` +1 -1
+  - `setup.py` +1 -1
+
 ## 0.6.7-wip: Airlock touch-mode button (Mouse / Native touch / Trackpad / Right-click) (2026-11-14)
 
 - 14 files changed, 876 insertions(+), 14 deletions(-)

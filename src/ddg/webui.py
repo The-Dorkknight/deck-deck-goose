@@ -35,7 +35,10 @@ PAGE = r"""<!doctype html>
 <title>Deck Deck Goose __VERSION__ (Built __BUILD__)</title>
 <style>
 :root{--bg:#0a0d1f;--bg2:#121735;--card:#141a38;--ink:#eaf2ff;--mute:#9aa8d0;--line:#27305e;--accent:#25c8ff;--accent2:#ff8a1f;--ok:#4ade80;--bad:#ff7b7b;--warn:#3a2a0a;--warnink:#ffcf66;--chip:#1c2348;--glow:0 0 18px rgba(37,200,255,.35)}
-html{background:#0a0d1f}*{box-sizing:border-box}body{margin:0;background:radial-gradient(1200px 500px at 50% -120px,#1b2760 0,var(--bg) 70%) fixed;color:var(--ink);font:16px/1.5 system-ui,sans-serif}
+html{background:#0a0d1f}*{box-sizing:border-box}
+/* Touch in Game Mode: a tap must press, never select text. Text stays selectable where copying matters. */
+body{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+input,textarea,pre,code,.mono,.sel{-webkit-user-select:text;user-select:text}body{margin:0;background:radial-gradient(1200px 500px at 50% -120px,#1b2760 0,var(--bg) 70%) fixed;color:var(--ink);font:16px/1.5 system-ui,sans-serif}
 main{max-width:980px;margin:0 auto;padding:16px}
 h1{font-size:1.5rem;margin:.2em 0}h2{font-size:1.05rem;margin:0 0 .6em;color:var(--accent2)}h3{color:var(--accent);font-size:1rem}
 .hero{display:block;width:100%;max-height:360px;object-fit:cover;object-position:50% 0;border-radius:14px;border:1px solid var(--line);box-shadow:var(--glow)}
@@ -68,6 +71,10 @@ button:disabled,select:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(
 .acts select{width:100%;font-size:.88rem;padding:.4em}.acts .row{margin:0;gap:6px}.acts button{padding:.4em .5em;font-size:.86rem;flex:1 1 auto}
 .bar{height:10px;background:var(--chip);border-radius:99px;overflow:hidden;margin:8px 0}.bar i{display:block;height:100%;background:var(--accent);width:0}
 .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0}.toolbar input[type=search]{flex:1;min-width:160px}
+#picker{position:fixed;inset:0;background:rgba(2,4,14,.8);display:none;align-items:center;justify-content:center;padding:16px;z-index:50}
+#picker .pk{background:var(--card);border:2px solid var(--accent);border-radius:14px;padding:16px;width:min(520px,100%);max-height:85vh;overflow:auto}
+#picker .pk h3{margin:0 0 10px;font-size:1.05rem}#picker .pk button{display:block;width:100%;text-align:left;margin:6px 0;padding:.8em 1em;font-size:1.05rem}
+#picker .pk button.on{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset}
 #modal{position:fixed;inset:0;background:rgba(2,4,14,.75);display:none;align-items:center;justify-content:center;padding:16px}
 #modal div{background:var(--card);border-radius:12px;padding:18px;max-width:520px}
 @media(max-width:600px){.fold{display:none}.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.meta{padding:8px 8px 0}.acts{padding:8px}.acts button{font-size:.8rem;padding:.35em .3em}.chip{font-size:.72rem}}
@@ -82,7 +89,7 @@ body.gm input[type=checkbox]{width:28px;height:28px}
 .why{font-size:.82rem;color:var(--mute);margin-top:6px;line-height:1.35}.why b{color:var(--ink)}
 button.del{border-color:#d9534f;color:#ff8f8b}button.del:not(:disabled):hover{background:#d9534f;color:#fff}
 #pageerr{display:none;background:#5a1010;color:#ffd6d6;border:2px solid #ff7b7b;border-radius:10px;padding:.7em 1em;margin:10px 0}
-</style></head><body><main><div id="pageerr"></div>
+</style></head><body><main><div id="pageerr"></div><div id="picker"><div class="pk"></div></div>
 <h1 class="sr">Deck Deck Goose</h1>
 <img class="hero" src="/assets/hero.webp" alt="Deck Deck Goose: a cyborg goose carrying a Steam Deck">
 <div id="band"><i></i><span id="bandtxt">Checking mode...</span></div>
@@ -148,15 +155,21 @@ button.del{border-color:#d9534f;color:#ff8f8b}button.del:not(:disabled):hover{ba
 </section>
 
 <section id="tab-airlock" hidden>
+<div class="card" id="alena" style="border:2px solid #ff7b7b"><h2 style="color:#ff9b9b">&#9888; Airlock may block Desktop Mode</h2>
+<p id="alrisk" style="margin-top:0"></p><p id="alenastate" class="mute"></p>
+<div class="row"><button class="amber" id="alenable">Enable Airlock</button><button id="aldisable">Disable Airlock</button></div></div>
 <div class="card"><h2>Airlock: a desktop inside Game Mode</h2>
 <p class="mute" style="margin-top:0">Tap the <b>Airlock</b> tile in Steam's Game Mode and a KDE desktop opens in a window. Your game and Steam keep running underneath. Close the desktop (or press <b>Back to Game</b>) and you are straight back, with no logout and no reboot.</p>
 <div class="note">Work in progress: works on a ROG Ally with Bazzite (tested twice); smoothness, Start-menu popup and other handhelds still being worked on. If something looks wrong, run <b>Check this device</b> and send me the result.</div>
 <div id="alinfo" class="mute" style="margin-top:8px">Checking...</div>
-<div class="row"><button class="amber" id="alopen">Open Airlock</button><button id="alstop">Back to Game</button><button id="alprobe">Check this device</button><button id="alclean" title="Closes desktop programs an earlier Airlock left running">Close leftovers</button></div>
+<div class="row"><button class="amber" id="alopen">Open Airlock</button><button id="alstop">Back to Game</button><button id="alprobe">Check this device</button><button id="alclean" title="Closes desktop programs an earlier Airlock left running">Close leftovers</button><button id="alrepair">Repair Desktop Mode</button></div>
+<p class="mute" style="font-size:.85rem">Desktop Mode returning straight to Game Mode? <b>Repair Desktop Mode</b> undoes anything an Airlock left behind: its settings, programs, services and session environment. Airlock also does this by itself every time it closes.</p>
 <div class="row" style="align-items:center;gap:10px;flex-wrap:wrap"><label>Desktop size <select id="alres"><option value="auto">Bigger &amp; faster (about 720p)</option><option value="native">Sharp (screen's full resolution)</option></select></label>
 <label>Connection <select id="albk"><option value="auto">Automatic (smoothest that works)</option><option value="wayland">Wayland (direct)</option><option value="x11">X11 (older, proven)</option></select></label><small id="alsz" class="mute"></small></div>
 <div class="row" style="align-items:center;gap:10px;flex-wrap:wrap"><label>Controller <select id="alpad"><option value="on">Moves the mouse (on)</option><option value="off">Off</option></select></label>
 <label>Pointer speed <select id="alspd"><option value="slow">Slow</option><option value="normal">Normal</option><option value="fast">Fast</option></select></label>
+<label>Touch lock <select id="altlock"><option value="on">Locked at start (4 fingers down unlocks)</option><option value="off">Unlocked at start</option></select></label>
+<label>Gestures <select id="algest"><option value="on">On (4 fingers down: lock; 3-finger double tap: next mode)</option><option value="off">Off</option></select></label>
 <label>Touch button <select id="altouch"><option value="on">On (top-left in Airlock)</option><option value="off">Off</option></select></label>
 <button id="alpadfix" style="display:none">Allow controller (asks for your password once)</button><small id="alpd" class="mute"></small></div>
 <h3>If the nested desktop can't open, it tries, in order</h3>
@@ -190,6 +203,32 @@ const TOKEN="__TOKEN__";const GM=__GM__;const PLATFORM="__PLATFORM__";const LINU
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let gone=false;
+/* Drop-down lists in Game Mode: Firefox draws a <select>'s list in a separate pop-up window, which gamescope can
+   leave unreachable (the list opens and nothing in it can be tapped). In Game Mode (or on a touch screen) the
+   choices are shown inside the page instead, as big buttons; picking one sets the <select> and fires its change. */
+function openPicker(sel){const pk=$('picker');if(!pk||pk.style.display==='flex')return;
+ const lab=sel.closest('label');let title=sel.title||'';
+ if(lab){const c=lab.cloneNode(true);c.querySelectorAll('select').forEach(x=>x.remove());title=c.textContent.trim()||title}
+ const box=pk.querySelector('.pk');box.innerHTML='<h3>'+esc(title||'Choose')+'</h3>';
+ [...sel.options].forEach(o=>{if(o.disabled||o.hidden)return;const b=document.createElement('button');b.type='button';b.textContent=o.textContent;
+  if(o.value===sel.value)b.className='on';b.onclick=()=>{pk.style.display='none';if(sel.value!==o.value){sel.value=o.value;sel.dispatchEvent(new Event('change',{bubbles:true}))}};box.appendChild(b)});
+ const x=document.createElement('button');x.type='button';x.textContent='Cancel';x.onclick=()=>{pk.style.display='none'};box.appendChild(x);
+ pk.style.display='flex';}
+if(GM||(window.matchMedia&&matchMedia('(pointer:coarse)').matches)){
+ const grab=e=>{const s=e.target.closest&&e.target.closest('select');if(s&&!s.disabled&&!s.multiple){e.preventDefault();e.stopPropagation();openPicker(s)}};
+ document.addEventListener('mousedown',grab,true);document.addEventListener('touchend',grab,{capture:true,passive:false});
+ document.addEventListener('keydown',e=>{const s=document.activeElement;if(s&&s.tagName==='SELECT'&&(e.key==='Enter'||e.key===' ')){e.preventDefault();openPicker(s)}},true);
+ document.addEventListener('click',e=>{const pk=$('picker');if(pk&&e.target===pk)pk.style.display='none'},true);}
+/* A tap that wobbles a few pixels can end as a drag, and the browser then sends no click. Treat a press and release
+   on the same button, close together and quick, as a press (only when no real click arrived: never twice). */
+(function(){let d=null;
+ document.addEventListener('pointerdown',e=>{const b=e.target.closest&&e.target.closest('button,a[href],summary,label,[data-tap]');
+  d=b&&!b.disabled?{b:b,x:e.clientX,y:e.clientY,t:Date.now(),clicked:false}:null;},true);
+ document.addEventListener('click',e=>{if(d&&d.b.contains(e.target))d.clicked=true;},true);
+ document.addEventListener('pointerup',e=>{const s=d;if(!s)return;const dx=e.clientX-s.x,dy=e.clientY-s.y;
+  if(dx*dx+dy*dy>40*40||Date.now()-s.t>1500){d=null;return}
+  setTimeout(()=>{if(d===s)d=null;if(!s.clicked&&!s.b.disabled&&document.contains(s.b)){try{getSelection().removeAllRanges()}catch(_){}s.b.click()}},400);},true);
+})();
 function pageerr(m){const e=$('pageerr');if(!e)return;e.style.display='block';e.innerHTML='<b>Something went wrong in this page:</b> '+esc(m)+' <button type="button" onclick="location.reload()">Reload</button><br><small>Please send a photo of this message.</small>';}
 window.addEventListener('error',ev=>pageerr((ev.message||'script error')+(ev.lineno?' (line '+ev.lineno+')':'')));
 window.addEventListener('unhandledrejection',ev=>pageerr(String(ev.reason&&ev.reason.message||ev.reason)));
@@ -244,7 +283,7 @@ function renderSteam(){
  h+=(s.recovered||[]).map(x=>`<div class="${x.ok?'ok':'bad'}">${esc(x.name)}: ${esc(x.detail)}</div>`).join('');
  h+='<table style="margin-top:8px"><tr><th>Library drive</th><th class="fold">Folder</th><th class="nw">Free</th><th class="nw">Type</th><th>Compression</th></tr>'+s.libraries.map(l=>`<tr><td>${esc(l.drive)}</td><td class="fold"><code>${esc(l.path)}</code></td><td class="nw">${esc(l.free)}</td><td class="nw">${esc(l.fstype)}</td><td>${!l.available?'<span class="bad">not '+(LINUX?'mounted':'connected')+'</span>':l.can_compress?(l.compress?'drive compresses new files ('+esc(l.compress)+')':'available'):'<span class="mute">not available</span>'}</td></tr>`).join('')+'</table>';
  $('steaminfo').innerHTML=h;
- if($('gmadd'))$('gmadd').onclick=()=>{if(confirm('Add the Deck Deck Goose and Airlock tiles to Steam so they open in Game Mode?\n\nSteam is closed for a moment while its shortcut list is updated, then started again.'))startJob('/api/gamemode/install',{});};
+ if($('gmadd'))$('gmadd').onclick=()=>{if(confirm('Add the Deck Deck Goose tile to Steam so it opens in Game Mode? (The Airlock tile is only added once Airlock is enabled in the Airlock tab.)\n\nSteam is closed for a moment while its shortcut list is updated, then started again.'))startJob('/api/gamemode/install',{});};
  if($('gmdel'))$('gmdel').onclick=()=>{if(confirm('Remove the Deck Deck Goose and Airlock tiles from Steam? Steam is closed for a moment.'))startJob('/api/gamemode/remove',{});};
  if($('closesteam'))$('closesteam').onclick=async()=>{$('closesteam').disabled=true;$('closesteam').textContent='Closing...';const r=await api('/api/steam/close',{});if(!r.ok)alert(r.detail);loadGames();};
 }
@@ -347,17 +386,23 @@ async function band(){try{const o=await api('/api/airlock/status');const i=o.ind
 async function al(){const [o,p]=await Promise.all([api('/api/airlock/status'),api('/api/airlock/plan')]);
  const open=o.portal_open;
  $('alinfo').innerHTML='You are in: <b>'+(o.session==='game'?'Game Mode':o.session==='desktop'?'Desktop Mode':'an unrecognised mode')+'</b>. '+(open?'<b class="ok">Airlock is open.</b>':'Airlock is closed.')+(o.last&&o.last.status==='failed'?' <span class="bad">Last try failed: see the log below.</span>':'');
- $('alopen').textContent=o.session==='game'?'Open Airlock':'Try Airlock from here';$('alopen').disabled=open;$('alstop').disabled=!open;
+ $('alopen').textContent=o.session==='game'?'Open Airlock':'Try Airlock from here';$('alopen').disabled=open||!o.enabled;$('alstop').disabled=!open;
+ AL=o;$('alrisk').textContent=o.risk||'';
+ $('alenastate').innerHTML=o.enabled?'<b class="bad">Airlock is enabled.</b> If Desktop Mode ever goes straight back to Game Mode: <b>Repair Desktop Mode</b>, then <b>Disable Airlock</b> (both work from Game Mode).'
+   :(o.session==='game'?'Airlock is <b>off</b>. Enable it in <b>Desktop Mode</b>: the first sanity check needs a Desktop Mode that just started normally.':'Airlock is <b>off</b>. Enabling asks two sanity checks, then adds the Airlock tile to Game Mode.');
+ $('alenable').hidden=!!o.enabled;$('alenable').disabled=o.session==='game';$('aldisable').hidden=!o.enabled;
  const names={full:'Full KDE desktop in a window (game keeps running)',lite:'Just a file manager and terminal (uses less memory)',switch:'Real Desktop Mode (your game closes; asks first)',advise:'Show how to switch by hand'};
  $('alplan').innerHTML=p.modes.map(m=>'<li>'+esc(names[m]||m)+'</li>').join('')+p.notes.map(n=>'<li class="bad">'+esc(n)+'</li>').join('');
  const op=o.options||{};$('alres').value=['auto','native'].includes(op.resolution)?op.resolution:'auto';$('albk').value=op.backend||'auto';
  const L=o.last||{};$('alsz').textContent='Opens at '+(op.size||'?')+(op.panel&&op.panel!=='0x0'?' (screen '+op.panel+')':'')+(L.backend?'. Last time: '+L.backend+(L.size?' at '+L.size:'')+(L.drawing==='software'?', drawn on the CPU (slow)':L.drawing==='gpu'?', drawn on the graphics chip':''):'');
- $('alpad').value=op.pad==='off'?'off':'on';$('altouch').value=op.touch_button==='off'?'off':'on';$('altouch').title='Starts in: '+(o.touch_label||'');$('alspd').value=op.pad_speed||'normal';
+ $('alpad').value=op.pad==='off'?'off':'on';$('altouch').value=op.touch_button==='off'?'off':'on';$('altlock').value=op.touch_lock==='off'?'off':'on';$('algest').value=op.gestures==='off'?'off':'on';$('altouch').title='Starts in: '+(o.touch_label||'');$('alspd').value=op.pad_speed||'normal';
  const P=o.pad||{};let pt;if(P.uinput==='ok')pt=(P.pads&&P.pads.length)?'Controller seen: '+P.pads.join(', ')+'. A=click, X/LT=right-click, left stick=mouse, right stick=scroll, B=Esc, Y=Start menu, d-pad=arrows.':'No controller seen right now (it appears once Steam starts it).';else pt=P.uinput==='missing'?'The system has no /dev/uinput, so the controller cannot drive the desktop.':'This app may not write /dev/uinput yet, so the controller cannot drive the desktop.';
  $('alpd').textContent=pt+(L.pad?' Last time: '+L.pad+'.':'');$('alpadfix').style.display=P.uinput==='ok'?'none':'';
  try{const s=await api('/api/airlock/sleephook');$('alsleep').checked=s.installed;}catch(e){}}
 $('alres').onchange=async()=>{await api('/api/airlock/options',{resolution:$('alres').value});al();};
 $('alpad').onchange=async()=>{await api('/api/airlock/options',{pad:$('alpad').value});al();};
+$('altlock').onchange=async()=>{await api('/api/airlock/options',{touch_lock:$('altlock').value});al();};
+$('algest').onchange=async()=>{await api('/api/airlock/options',{gestures:$('algest').value});al();};
 $('altouch').onchange=async()=>{await api('/api/airlock/options',{touch_button:$('altouch').value});al();};
 $('alspd').onchange=async()=>{await api('/api/airlock/options',{pad_speed:$('alspd').value});al();};
 $('alpadfix').onclick=async()=>{const r=await alact('/api/airlock/padaccess');if(r&&r.message)$('alsteps').innerHTML='<tr><td class="'+(r.ok?'ok':'bad')+'">'+esc(r.message)+'</td></tr>';};
@@ -366,6 +411,15 @@ async function alact(path,body){document.querySelectorAll('#tab-airlock button,#
  try{const r=await api(path,body||{});if(Array.isArray(r))$('alsteps').innerHTML=rows(r);return r;}finally{document.querySelectorAll('#tab-airlock button,#alsleep').forEach(b=>b.disabled=false);await al();band();}}
 $('alopen').onclick=async()=>{const r=await alact('/api/airlock/start',{force:!GM&&true});if(r&&r.message)$('alsteps').innerHTML='<tr><td class="mute">'+esc(r.message)+'</td></tr>';};
 $('alstop').onclick=()=>alact('/api/airlock/stop');
+$('alrepair').onclick=async()=>{const r=await alact('/api/airlock/repair');if(r&&r.message)$('alsteps').innerHTML='<tr><td class="'+(r.ok?'':'bad')+'">'+esc(r.message)+'</td></tr>';};
+let AL={};
+$('alenable').onclick=async()=>{if(!confirm(AL.risk+'\n\nContinue to the two sanity checks?'))return;
+ if(!confirm(AL.check1+'\n\nOK = yes, Desktop Mode started normally.'))return;
+ const typed=prompt(AL.check2,'');if(typed===null)return;
+ if(typed.trim().toUpperCase()!==AL.typed){alert('Airlock not enabled: '+AL.typed+' was not typed.');return}
+ await startJob('/api/airlock/enable',{desktop_ok:true,typed:typed});const t=setInterval(async()=>{if(!busy){clearInterval(t);al();}},1500);};
+$('aldisable').onclick=async()=>{if(!confirm('Disable Airlock? It closes if open, Repair Desktop Mode runs, and its Game Mode tile is removed (Steam closes for a moment; in Game Mode the tile stays but refuses to open).'))return;
+ await startJob('/api/airlock/disable',{});const t=setInterval(async()=>{if(!busy){clearInterval(t);al();}},1500);};
 $('alclean').onclick=async()=>{const r=await alact('/api/airlock/cleanup');if(r&&r.message)$('alsteps').innerHTML='<tr><td class="mute">'+esc(r.message)+'</td></tr>';};
 $('alback').onclick=()=>alact('/api/airlock/backentry');
 $('alsleep').onchange=()=>alact('/api/airlock/sleephook',{on:$('alsleep').checked});
@@ -387,12 +441,12 @@ $('zlog').onclick=async()=>{const r=await api('/api/zombie/log');$('zout').hidde
 setInterval(()=>{if(!$('tab-wake').hidden&&!document.hidden&&!document.querySelector('#tab-wake button:disabled'))wk();},10000);
 async function inst(){let s;try{s=await api('/api/app/status');}catch(e){return;}
  const need=!s.installed||s.update||!s.menu||!s.tiles;$('inst').hidden=GM||!need;if($('inst').hidden)return;
- $('insttxt').innerHTML=!s.installed?'Puts Deck Deck Goose in the app menu and adds the <b>Deck Deck Goose</b> and <b>Airlock</b> tiles to Steam\'s Game Mode, in one go.'
+ $('insttxt').innerHTML=!s.installed?'Puts Deck Deck Goose in the app menu and adds the <b>Deck Deck Goose</b> tile to Steam\'s Game Mode. <b class="bad">Airlock stays off</b> (it may block Desktop Mode): enable it later in the Airlock tab after two sanity checks.'
   :s.update?`Version <b>${esc(s.version)}</b> is installed; this is <b>${esc(s.running)}</b>. Press Update so the menu entry and the Game Mode tiles use this version.`
   :`Installed (${esc(s.version)}), but ${!s.menu?'the app-menu entry':''}${!s.menu&&!s.tiles?' and ':''}${!s.tiles?'the Game Mode tiles':''} ${(!s.menu&&!s.tiles)?'are':'is'} missing.`;
  if(!s.browser)$('insttxt').innerHTML+=' <span class="bad">No browser found for Game Mode: install Firefox first (Bazzite: Bazaar or Discover).</span>';
  $('instgo').textContent=!s.installed?'Install':s.update?'Update to '+s.running:'Repair';$('instdel').hidden=!s.installed;}
-$('instgo').onclick=async()=>{if(!confirm('Install Deck Deck Goose?\n\n- program copy in ~/.local/share/deck-deck-goose\n- Deck Deck Goose in the app menu\n- Deck Deck Goose and Airlock tiles in Game Mode (Steam closes for a moment, then starts again)'))return;
+$('instgo').onclick=async()=>{if(!confirm('Install Deck Deck Goose?\n\n- program copy in ~/.local/share/deck-deck-goose\n- Deck Deck Goose in the app menu\n- the Deck Deck Goose tile in Game Mode (Steam closes for a moment, then starts again)\n\nAirlock is NOT turned on: it may block Desktop Mode. Enable it later in the Airlock tab (two sanity checks).'))return;
  await startJob('/api/app/install',{});const t=setInterval(async()=>{if(!busy){clearInterval(t);inst();}},1500);};
 $('instdel').onclick=async()=>{if(!confirm('Remove the app-menu entry and the Game Mode tiles? Steam closes for a moment.'))return;
  await startJob('/api/app/uninstall',{});const t=setInterval(async()=>{if(!busy){clearInterval(t);inst();}},1500);};
@@ -569,16 +623,29 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(airlock.status())
             if path == "/api/airlock/plan":
                 return self._json(airlock.plan())
+            if path == "/api/airlock/enable":
+                why = airlock.checks_passed(b.get("desktop_ok"), b.get("typed"))
+                if why:
+                    return self._json({"error": why})
+                return self._start("Enabling Airlock", lambda j: airlock.enable(True, airlock.TYPED))
+            if path == "/api/airlock/disable":
+                return self._start("Disabling Airlock", lambda j: airlock.disable())
             if path == "/api/airlock/start":
+                if not airlock.enabled():
+                    return self._json({"ok": False, "message": "Airlock is not enabled: Enable Airlock above (two sanity checks, in Desktop Mode)."})
                 airlock.spawn_start(force=bool(b.get("force")))
                 return self._json({"ok": True, "message": "Starting... the colour bar at the top turns amber when it is open."})
             if path == "/api/airlock/options":
                 return self._json(airlock.set_options(resolution=b.get("resolution"), backend=b.get("backend"),
                                                           pad=b.get("pad"), pad_speed=b.get("pad_speed"),
-                                                          touch_button=b.get("touch_button")))
+                                                          touch_button=b.get("touch_button"),
+                                                          touch_lock=b.get("touch_lock"), gestures=b.get("gestures")))
             if path == "/api/airlock/padaccess":
                 ok, msg = padbridge.grant_access()
                 return self._json({"ok": ok, "message": msg, "pad": padbridge.check()})
+            if path == "/api/airlock/repair":
+                from . import desktopguard
+                return self._json(desktopguard.repair())
             if path == "/api/airlock/cleanup":
                 return self._json(airlock.cleanup())
             if path == "/api/airlock/stop":
@@ -612,7 +679,7 @@ class Handler(BaseHTTPRequestHandler):
                 from . import appinstall
                 return self._start("Removing the menu entry and Game Mode tiles", lambda j: appinstall.uninstall())
             if path == "/api/gamemode/install":
-                return self._start("Adding Deck Deck Goose and Airlock to Game Mode", lambda j: gamemode.install())
+                return self._start("Adding the Game Mode tiles", lambda j: gamemode.install())
             if path == "/api/gamemode/remove":
                 return self._start("Removing the Game Mode tile", lambda j: gamemode.remove())
             if path == "/api/steam/close":
@@ -663,6 +730,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(open_browser: bool = True, url_file: str = "") -> int:
+    try:                                   # Game Mode launchers from an older version: rewrite them (next start uses it)
+        from . import gamemode
+        gamemode.refresh_launchers()
+    except Exception:  # noqa: BLE001
+        pass
+    try:                                   # an Airlock that died without putting the real desktop's settings back
+        from . import desktopguard
+        desktopguard.repair_stale()
+    except Exception:  # noqa: BLE001
+        pass
     try:                                   # an Airlock killed too hard to restore Steam's touch mode: fix it now
         from . import touchmode
         touchmode.repair_stale()

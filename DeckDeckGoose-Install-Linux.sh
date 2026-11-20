@@ -10,12 +10,17 @@ if [ -z "$PY" ]; then
   echo "Python 3 was not found."; printf "Press Enter to close..."; read -r _; exit 1
 fi
 echo "Installing Deck Deck Goose (Steam will close for a moment)..."
+echo
+echo "  WARNING: AIRLOCK MAY BLOCK DESKTOP MODE. This installer does NOT turn Airlock on."
+echo "  To use it later: Deck Deck Goose > Airlock tab > Enable Airlock (two sanity checks)."
+echo
 PYTHONPATH=src "$PY" -m ddg install-app
 status=$?
 echo
 if [ "$status" -eq 0 ]; then
-  echo "Done. Find Deck Deck Goose in the app menu, and the Deck Deck Goose and Airlock tiles in"
-  echo "Steam (Game Mode: Library > Non-Steam). You can delete this download folder now."
+  echo "Done. Find Deck Deck Goose in the app menu, and its tile in Steam"
+  echo "(Game Mode: Library > Non-Steam). Airlock stays OFF until you enable it in the Airlock tab."
+  echo "You can delete this download folder now."
 else
   echo "Some steps did not work (see the lines marked above)."
 fi

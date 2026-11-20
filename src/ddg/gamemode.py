@@ -67,6 +67,10 @@ user_pref("network.connectivity-service.enabled", false);
 user_pref("network.captive-portal-service.enabled", false);
 user_pref("network.proxy.type", 0);
 user_pref("network.proxy.no_proxies_on", "127.0.0.1, localhost");
+// Taps were selecting text instead of pressing buttons: without real touch, Firefox on gamescope's X display
+// sees a finger as a mouse, and the tiny slide between press and release becomes a text selection. Real touch
+// events (with MOZ_USE_XINPUT2=1 set by the launcher) make a tap a tap and a slide a scroll.
+user_pref("dom.w3c_touch_events.enabled", 1);
 """
 
 
@@ -134,7 +138,7 @@ case "__KIND__" in
     P="$HOME/.var/app/$BROWSER/data/ddg-gamemode-profile"; mkdir -p "$P"
     cat > "$P/user.js" <<'PREFS'
 __PREFS__PREFS
-    flatpak run "$BROWSER" --new-instance --profile "$P" --kiosk "$URL" >>"$DATA/gamemode-browser.log" 2>&1 & ;;
+    flatpak run --env=MOZ_USE_XINPUT2=1 "$BROWSER" --new-instance --profile "$P" --kiosk "$URL" >>"$DATA/gamemode-browser.log" 2>&1 & ;;
   chromium)
     D="$HOME/.var/app/$BROWSER/data/ddg-gamemode-chrome"; mkdir -p "$D"
     flatpak run "$BROWSER" --user-data-dir="$D" --no-first-run --no-proxy-server --kiosk --app="$URL" >>"$DATA/gamemode-browser.log" 2>&1 & ;;
@@ -142,7 +146,7 @@ __PREFS__PREFS
     P="$DATA/ddg-gamemode-profile"; mkdir -p "$P"
     cat > "$P/user.js" <<'PREFS'
 __PREFS__PREFS
-    "$BROWSER" --new-instance --profile "$P" --kiosk "$URL" >>"$DATA/gamemode-browser.log" 2>&1 & ;;
+    MOZ_USE_XINPUT2=1 "$BROWSER" --new-instance --profile "$P" --kiosk "$URL" >>"$DATA/gamemode-browser.log" 2>&1 & ;;
   native-chromium)
     D="$DATA/ddg-gamemode-chrome"; mkdir -p "$D"
     "$BROWSER" --user-data-dir="$D" --no-first-run --no-proxy-server --kiosk --app="$URL" >>"$DATA/gamemode-browser.log" 2>&1 & ;;
@@ -152,6 +156,35 @@ trap 'kill $BR $SERVER 2>/dev/null; pkill -f ddg-gamemode-p 2>/dev/null; pkill -
 while kill -0 $SERVER 2>/dev/null && kill -0 $BR 2>/dev/null; do sleep 1; done
 rm -f "$URLFILE"
 '''.replace("__BROWSER__", browser).replace("__KIND__", kind).replace("__PREFS__", FIREFOX_PREFS)
+
+
+def refresh_launchers() -> List[str]:
+    """Rewrites the Game Mode launchers that already exist when this version writes them differently, so fixes in
+    them arrive with an update (not only after pressing Add to Game Mode again). Atomic replace: a launcher that is
+    running right now keeps reading its old copy. Returns the tiles it updated."""
+    done = []
+    for t in TILES:
+        lp = launcher_path(t)
+        if not lp.exists():
+            continue
+        try:
+            if t == "ddg":
+                b = find_browser()
+                if not b:
+                    continue
+                text = launcher_text(*b)
+            else:
+                text = airlock_launcher_text()
+            if lp.read_text(errors="replace") == text:
+                continue
+            tmp = lp.with_name(lp.name + ".new")
+            tmp.write_text(text)
+            os.chmod(str(tmp), 0o755)
+            os.replace(str(tmp), str(lp))
+            done.append(t)
+        except OSError:
+            continue
+    return done
 
 
 def airlock_launcher_text() -> str:
@@ -284,7 +317,15 @@ def _drop_legacy(items: dict, grid: Path) -> int:
     return gone
 
 
-def install(tiles: Tuple[str, ...] = ("ddg", "airlock")) -> List[Step]:
+def default_tiles() -> Tuple[str, ...]:
+    """Deck Deck Goose's own tile always; the Airlock tile only once Airlock is enabled (two sanity checks)."""
+    from . import airlock
+    return ("ddg", "airlock") if airlock.enabled() else ("ddg",)
+
+
+def install(tiles: Optional[Tuple[str, ...]] = None) -> List[Step]:
+    tiles = default_tiles() if tiles is None else tiles
+
     def work() -> List[Step]:
         steps: List[Step] = []
         want = [t for t in tiles if t in TILES]
